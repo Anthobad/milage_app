@@ -31,9 +31,9 @@ class _AppContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Theme mode will be driven by a Riverpod provider in Phase 7 (Profile &
-    // Settings). Dark mode is the default per UI guidelines.
-    const ThemeMode themeMode = ThemeMode.dark;
+    // Watches the global theme provider — defaults to ThemeMode.dark.
+    // Can be changed at runtime (e.g. from Profile & Settings in Phase 7).
+    final ThemeMode themeMode = ref.watch(themeProvider);
 
     return MaterialApp.router(
       title: 'TripRank',

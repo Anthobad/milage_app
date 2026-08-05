@@ -2,4 +2,5 @@
 export 'theme/app_theme.dart';
 export 'theme/colors.dart';
 export 'theme/spacing.dart';
+export 'theme/theme_provider.dart';
 export 'theme/typography.dart';

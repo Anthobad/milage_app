@@ -90,6 +90,24 @@ _Last updated: 2026-08-05_
 
 ---
 
+### Phase 2.5 — Theme System
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/app/theme/theme_provider.dart`** — `ThemeModeNotifier` (`Notifier<ThemeMode>`) + `themeProvider` (`NotifierProvider`). Defaults to `ThemeMode.dark`. Exposes `setTheme(ThemeMode)` for future use in Profile & Settings (Phase 7). Used `NotifierProvider` instead of the removed `StateProvider` — Riverpod 3.x only.
+- **`lib/app/theme.dart`** — Barrel updated to export `theme_provider.dart`.
+- **`lib/app/app.dart`** — `_AppContent` now calls `ref.watch(themeProvider)` instead of hardcoded `const ThemeMode.dark`.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Riverpod theme provider created
+- [x] Theme provider connected to `MaterialApp.router`
+
+---
+
 ## Phase 3 — Vehicle System
 
 **Status: ⬜ Not started**
