@@ -1,6 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/analytics/presentation/analytics_screen.dart';
+import '../features/cars/presentation/cars_screen.dart';
+import '../features/map/presentation/map_screen.dart';
+import '../features/profile/presentation/profile_screen.dart';
+import '../features/trips/presentation/trip_screen.dart';
+import 'main_navigation.dart';
+
 /// Route path constants.
 class AppRoutes {
   AppRoutes._();
@@ -14,53 +21,69 @@ class AppRoutes {
 }
 
 /// Application router.
-/// Feature screens will be wired in as features are implemented.
+///
+/// Uses a [StatefulShellRoute] to render [MainNavigation] as the persistent
+/// bottom-nav shell.  Each branch keeps its own navigation stack.
 final GoRouter appRouter = GoRouter(
-  initialLocation: AppRoutes.root,
+  initialLocation: AppRoutes.map,
   debugLogDiagnostics: false,
   routes: [
-    GoRoute(
-      path: AppRoutes.root,
-      builder: (BuildContext context, GoRouterState state) {
-        // Temporary placeholder until the Map feature is implemented.
-        return const _AppShellPlaceholder();
+    StatefulShellRoute.indexedStack(
+      builder: (BuildContext context, GoRouterState state,
+          StatefulNavigationShell navigationShell) {
+        return MainNavigation(navigationShell: navigationShell);
       },
-    ),
-  ],
-);
-
-/// Minimal placeholder screen shown before the Map feature is implemented.
-/// Will be replaced in Phase 4 — Map System.
-class _AppShellPlaceholder extends StatelessWidget {
-  const _AppShellPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.map_outlined,
-              size: 64,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'TripRank',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'App shell ready.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+      branches: [
+        // Branch 0 — Map
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: AppRoutes.map,
+              builder: (context, state) => const MapScreen(),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
+
+        // Branch 1 — Trips
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: AppRoutes.trips,
+              builder: (context, state) => const TripsScreen(),
+            ),
+          ],
+        ),
+
+        // Branch 2 — Cars
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: AppRoutes.cars,
+              builder: (context, state) => const CarsScreen(),
+            ),
+          ],
+        ),
+
+        // Branch 3 — Analytics
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: AppRoutes.analytics,
+              builder: (context, state) => const AnalyticsScreen(),
+            ),
+          ],
+        ),
+
+        // Branch 4 — Profile
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: AppRoutes.profile,
+              builder: (context, state) => const ProfileScreen(),
+            ),
+          ],
+        ),
+      ],
+    ),
+  ],
+);

@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-04_
+_Last updated: 2026-08-05_
 
 ---
 
@@ -35,7 +35,7 @@ _Last updated: 2026-08-04_
 
 ## Phase 2 — App Shell
 
-**Status: 🟡 In Progress**
+**Status: ✅ Completed**
 
 ### Phase 2.1 — Folder structure
 - [x] Feature folders created: `map`, `trips`, `cars`, `analytics`, `profile`
@@ -45,7 +45,7 @@ _Last updated: 2026-08-04_
 ### Phase 2.2 — Dependencies
 - [x] `flutter_riverpod`, `go_router`, `shared_preferences`, `uuid` added to `pubspec.yaml`
 
-### Phase 2.3 — App Shell (app.dart, router.dart, theme.dart) ← **Current**
+### Phase 2.3 — App Shell (app.dart, router.dart, theme.dart)
 
 **Status: ✅ Done**  
 **Completed: 2026-08-04**
@@ -68,9 +68,25 @@ _Last updated: 2026-08-04_
 
 ---
 
-### Phase 2.4 — Main Navigation (next)
-- [ ] Implement bottom navigation bar (Map, Trips, Cars, Analytics, Profile)
-- [ ] Connect routes to navigation items
+### Phase 2.4 — Main Navigation
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/features/map/presentation/map_screen.dart`** — `MapScreen` placeholder (deferred to Phase 4).
+- **`lib/features/trips/presentation/trip_screen.dart`** — `TripsScreen` placeholder (deferred to Phase 5).
+- **`lib/features/cars/presentation/cars_screen.dart`** — `CarsScreen` placeholder (deferred to Phase 3).
+- **`lib/features/analytics/presentation/analytics_screen.dart`** — `AnalyticsScreen` placeholder (deferred to Phase 6).
+- **`lib/features/profile/presentation/profile_screen.dart`** — `ProfileScreen` placeholder (deferred to Phase 7).
+- **`lib/app/main_navigation.dart`** — `MainNavigation` shell widget using `StatefulNavigationShell` from GoRouter. Renders a Material 3 `NavigationBar` with 5 tabs (Map, Trips, Cars, Analytics, Profile). Styled via existing `NavigationBarTheme` in `AppTheme`.
+- **`lib/app/router.dart`** — Replaced placeholder root route with `StatefulShellRoute.indexedStack` containing 5 branches. `initialLocation` set to `/map`. `_AppShellPlaceholder` removed.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Implement bottom navigation bar (Map, Trips, Cars, Analytics, Profile)
+- [x] Connect routes to navigation items
 
 ---
 

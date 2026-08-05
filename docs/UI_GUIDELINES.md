@@ -116,6 +116,17 @@ Average speed
 
 Bottom navigation contains:
 
+TripRank uses a custom floating bottom navigation bar.
+
+Requirements:
+- Floating (not attached to screen edges)
+- Rounded corners
+- Respect safe areas
+- Large touch targets
+- Blue highlight for the active tab
+- Smooth transitions
+- Consistent across the app
+
 - Map
 - Trips
 - Cars
