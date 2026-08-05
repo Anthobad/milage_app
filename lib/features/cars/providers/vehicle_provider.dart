@@ -93,14 +93,33 @@ class VehicleListNotifier extends Notifier<VehicleState> {
 
   /// Remove the vehicle with [id] from the list.
   ///
-  /// If the deleted vehicle was selected, the selection is cleared.
+  /// Selection rules after deletion:
+  /// - If the deleted vehicle was not selected, selection is unchanged.
+  /// - If it was selected and other vehicles remain, the next one
+  ///   (or the previous if it was the last) becomes selected.
+  /// - If no vehicles remain, selection is cleared to null.
   void deleteVehicle(String id) {
-    final list = state.vehicles.where((v) => v.id != id).toList();
-    final stillSelected =
-        state.selectedVehicleId != id ? state.selectedVehicleId : null;
+    final oldList = state.vehicles;
+    final list = oldList.where((v) => v.id != id).toList();
+
+    String? nextSelectedId;
+    if (state.selectedVehicleId == id) {
+      // The deleted vehicle was selected — pick the next one.
+      if (list.isNotEmpty) {
+        final deletedIndex = oldList.indexWhere((v) => v.id == id);
+        // Use same index (now pointing to next item), or last item if at end.
+        final nextIndex = deletedIndex.clamp(0, list.length - 1);
+        nextSelectedId = list[nextIndex].id;
+      } else {
+        nextSelectedId = null;
+      }
+    } else {
+      nextSelectedId = state.selectedVehicleId;
+    }
+
     state = state.copyWith(
       vehicles: list,
-      selectedVehicleId: stillSelected,
+      selectedVehicleId: nextSelectedId,
     );
   }
 

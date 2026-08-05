@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/vehicle_provider.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../dialogs/add_vehicle_dialog.dart';
+import '../dialogs/delete_vehicle_dialog.dart';
 import 'vehicle_tile.dart';
 
 /// Vehicle selector sheet content.
@@ -100,12 +102,14 @@ class _DragHandle extends StatelessWidget {
   }
 }
 
-class _SheetHeader extends StatelessWidget {
+class _SheetHeader extends ConsumerWidget {
   const _SheetHeader({required this.secondaryTextColor});
   final Color secondaryTextColor;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final selectedVehicle = ref.watch(selectedVehicleProvider);
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md,
@@ -123,15 +127,17 @@ class _SheetHeader extends StatelessWidget {
                   ),
             ),
           ),
-          // Delete — placeholder, no action yet.
+          // Delete selected vehicle.
           IconButton(
-            onPressed: null,
+            onPressed: selectedVehicle == null
+                ? null
+                : () => showDeleteVehicleDialog(context, selectedVehicle),
             icon: Icon(Icons.delete_outline, color: secondaryTextColor),
             tooltip: 'Delete vehicle',
           ),
-          // Add — placeholder, no action yet.
+          // Add new vehicle.
           IconButton(
-            onPressed: null,
+            onPressed: () => showAddVehicleDialog(context),
             icon: const Icon(Icons.add, color: AppColors.primary),
             tooltip: 'Add vehicle',
           ),
@@ -199,7 +205,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.sm),
           TextButton.icon(
-            onPressed: null,
+            onPressed: () => showAddVehicleDialog(context),
             icon: const Icon(Icons.add, size: 18),
             label: const Text('Create your first vehicle'),
           ),

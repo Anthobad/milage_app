@@ -110,7 +110,7 @@ _Last updated: 2026-08-05_
 
 ## Phase 3 — Vehicle System
 
-**Status: 🟡 In Progress**
+**Status: ✅ Completed**
 
 ### Phase 3.1 — Vehicle Model
 
@@ -165,6 +165,31 @@ _Last updated: 2026-08-05_
 - [x] Selected vehicle shows check mark
 - [x] Tapping vehicle updates provider and closes sheet
 - [x] Empty state shown when no vehicles
+
+---
+
+### Phase 3.4 — Vehicle Management
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/features/cars/presentation/dialogs/vehicle_form_dialog.dart`** — `VehicleFormDialog` shared form widget used by both Add and Edit. Contains title, Brand/Model/Year text fields with validation, Type `DropdownButtonFormField` (7 types, easily extendable), Cancel + Save buttons. Pure UI — no business logic.
+- **`lib/features/cars/presentation/dialogs/add_vehicle_dialog.dart`** — `AddVehicleDialog` (`ConsumerStatefulWidget`). On save: generates UUID via `Uuid().v4()`, constructs `Vehicle`, calls `vehicleProvider.notifier.addVehicle()` (auto-selects first vehicle), closes dialog.
+- **`lib/features/cars/presentation/dialogs/edit_vehicle_dialog.dart`** — `EditVehicleDialog` (`ConsumerStatefulWidget`). Pre-fills all fields from the existing vehicle. On save: calls `vehicle.copyWith(...)` then `vehicleProvider.notifier.updateVehicle()`. Keeps same ID, no duplicates.
+- **`lib/features/cars/presentation/dialogs/delete_vehicle_dialog.dart`** — `DeleteVehicleDialog` (`ConsumerWidget`). `AlertDialog` with "Delete Vehicle?" title and vehicle name in message. Cancel closes with no changes. Delete calls `vehicleProvider.notifier.deleteVehicle()` then closes.
+- **`lib/features/cars/providers/vehicle_provider.dart`** — `deleteVehicle` updated: when deleted vehicle was selected, auto-selects the next vehicle at same index (or last if at end); clears to null only when list is empty.
+- **`lib/features/cars/presentation/widgets/car_selector_sheet.dart`** — `_SheetHeader` wired: `+` opens `showAddVehicleDialog`, Delete opens `showDeleteVehicleDialog` with selected vehicle (disabled when none selected). `_EmptyState` "Create your first vehicle" wired to `showAddVehicleDialog`.
+- **`lib/features/cars/presentation/widgets/vehicle_tile.dart`** — Edit icon wired to `showEditVehicleDialog`.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Add Vehicle dialog creates vehicle and auto-selects it
+- [x] Edit Vehicle dialog pre-fills fields and updates in place
+- [x] Delete confirmation dialog removes vehicle and auto-selects next
+- [x] Empty state "Create your first vehicle" opens Add dialog
+- [x] All flows go through vehicleProvider — no direct state mutation in UI
 
 ---
 
