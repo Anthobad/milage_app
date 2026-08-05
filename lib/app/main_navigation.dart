@@ -1,76 +1,173 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/cars/presentation/widgets/car_selector_sheet.dart';
 import 'theme/colors.dart';
 import 'theme/spacing.dart';
-import 'router.dart';
+
+// ---------------------------------------------------------------------------
+// Nav bar layout constants (shared between the bar and the sheet positioning)
+// ---------------------------------------------------------------------------
+
+/// Horizontal margin from screen edge — matches nav bar.
+const double _kNavHMargin = 16.0;
+
+/// Bottom margin above safe area — matches nav bar.
+const double _kNavVMargin = 12.0;
+
+/// Internal vertical padding of the nav bar.
+const double _kNavVPadding = 10.0;
+
+/// Approximate rendered height of a single nav item (icon + gap + label).
+const double _kNavItemHeight = 52.0;
+
+/// Gap between the sheet and the top of the nav bar.
+const double _kSheetNavGap = 12.0;
+
+/// Total height the nav bar occupies from the bottom of the screen
+/// (excluding the system safe area, which is added at runtime).
+const double _kNavBarStaticHeight =
+    _kNavVMargin + _kNavVPadding * 2 + _kNavItemHeight;
+
+// ---------------------------------------------------------------------------
+// MainNavigation
+// ---------------------------------------------------------------------------
 
 /// Shell widget that wraps all main tabs with a floating [_FloatingNavBar].
 ///
-/// Rendered by the [StatefulShellRoute] in [appRouter].
-/// Each tab maintains its own navigation stack.
-class MainNavigation extends StatelessWidget {
-  const MainNavigation({
-    super.key,
-    required this.navigationShell,
-  });
+/// The Cars tab is special — it shows [CarSelectorSheet] as an inline
+/// overlay inside the same Stack so the nav bar remains fully interactive.
+class MainNavigation extends StatefulWidget {
+  const MainNavigation({super.key, required this.navigationShell});
 
-  /// Provided by [StatefulShellRoute]; holds per-branch navigation state.
   final StatefulNavigationShell navigationShell;
 
-  // Tab order: Map → Trips → Cars → Analytics → Profile
+  @override
+  State<MainNavigation> createState() => _MainNavigationState();
+}
+
+class _MainNavigationState extends State<MainNavigation>
+    with SingleTickerProviderStateMixin {
   static const List<_NavItem> _items = [
-    _NavItem(
-      label: 'Map',
-      icon: Icons.map_outlined,
-      activeIcon: Icons.map,
-    ),
-    _NavItem(
-      label: 'Trips',
-      icon: Icons.route_outlined,
-      activeIcon: Icons.route,
-    ),
-    _NavItem(
-      label: 'Cars',
-      icon: Icons.directions_car_outlined,
-      activeIcon: Icons.directions_car,
-    ),
-    _NavItem(
-      label: 'Analytics',
-      icon: Icons.bar_chart_outlined,
-      activeIcon: Icons.bar_chart,
-    ),
-    _NavItem(
-      label: 'Profile',
-      icon: Icons.person_outline,
-      activeIcon: Icons.person,
-    ),
+    _NavItem(label: 'Map',       icon: Icons.map_outlined,            activeIcon: Icons.map),
+    _NavItem(label: 'Trips',     icon: Icons.route_outlined,          activeIcon: Icons.route),
+    _NavItem(label: 'Cars',      icon: Icons.directions_car_outlined, activeIcon: Icons.directions_car),
+    _NavItem(label: 'Analytics', icon: Icons.bar_chart_outlined,      activeIcon: Icons.bar_chart),
+    _NavItem(label: 'Profile',   icon: Icons.person_outline,          activeIcon: Icons.person),
   ];
 
+  static const int _carsTabIndex = 2;
+
+  bool _sheetOpen = false;
+
+  late final AnimationController _animController;
+  late final Animation<double> _fadeAnim;
+  late final Animation<Offset> _slideAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _fadeAnim = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
+    );
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 0.15),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
+    ));
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  void _openSheet() {
+    setState(() => _sheetOpen = true);
+    _animController.forward();
+  }
+
+  void _closeSheet() {
+    _animController.reverse().then((_) {
+      if (mounted) setState(() => _sheetOpen = false);
+    });
+  }
+
   void _onTabSelected(int index) {
-    navigationShell.goBranch(
+    if (index == _carsTabIndex) {
+      _sheetOpen ? _closeSheet() : _openSheet();
+      return;
+    }
+    // Tapping any other tab also closes the sheet if open.
+    if (_sheetOpen) _closeSheet();
+    widget.navigationShell.goBranch(
       index,
-      // Return to the initial route of the branch when re-tapping active tab.
-      initialLocation: index == navigationShell.currentIndex,
+      initialLocation: index == widget.navigationShell.currentIndex,
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
+    // Total height from screen bottom to the top of the nav bar.
+    final double navBarBottom =
+        _kNavBarStaticHeight + bottomInset + _kNavVMargin;
+
+    // Sheet sits this far above the screen bottom.
+    final double sheetBottom = navBarBottom + _kSheetNavGap;
+
+    final int displayIndex =
+        _sheetOpen ? _carsTabIndex : widget.navigationShell.currentIndex;
+
     return Scaffold(
-      // No bottomNavigationBar — the nav bar floats over the body via Stack.
       body: Stack(
         children: [
-          // Content — full screen; inner screens add their own padding if needed.
-          navigationShell,
+          // ── Page content ──────────────────────────────────────────────────
+          widget.navigationShell,
 
-          // Floating nav bar pinned to bottom, respecting safe area.
+          // ── Scrim — closes sheet on tap, sits below nav bar ───────────────
+          if (_sheetOpen)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _closeSheet,
+                behavior: HitTestBehavior.opaque,
+                child: const ColoredBox(color: Colors.transparent),
+              ),
+            ),
+
+          // ── Car selector sheet ────────────────────────────────────────────
+          if (_sheetOpen)
+            Positioned(
+              left: _kNavHMargin,
+              right: _kNavHMargin,
+              bottom: sheetBottom,
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: SlideTransition(
+                  position: _slideAnim,
+                  child: CarSelectorSheet(onClose: _closeSheet),
+                ),
+              ),
+            ),
+
+          // ── Floating nav bar ──────────────────────────────────────────────
           Positioned(
             left: 0,
             right: 0,
             bottom: 0,
             child: _FloatingNavBar(
-              selectedIndex: navigationShell.currentIndex,
+              selectedIndex: displayIndex,
               items: _items,
               onTap: _onTabSelected,
             ),
@@ -85,13 +182,6 @@ class MainNavigation extends StatelessWidget {
 // Floating navigation bar
 // ---------------------------------------------------------------------------
 
-/// A floating pill-shaped navigation bar that sits above the screen edge.
-///
-/// - Rounded corners (pill shape)
-/// - Respects system safe area (bottom inset)
-/// - Large touch targets (min 48 × 48 dp per item)
-/// - Blue highlight + scale animation on the active tab
-/// - Smooth animated transitions between tabs
 class _FloatingNavBar extends StatelessWidget {
   const _FloatingNavBar({
     required this.selectedIndex,
@@ -103,19 +193,9 @@ class _FloatingNavBar extends StatelessWidget {
   final List<_NavItem> items;
   final ValueChanged<int> onTap;
 
-  /// Horizontal margin from screen edges.
-  static const double _hMargin = 16.0;
-
-  /// Bottom margin above the system safe area.
-  static const double _vMargin = 12.0;
-
-  /// Internal vertical padding inside the bar.
-  static const double _vPadding = 10.0;
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final brightness = theme.brightness;
+    final brightness = Theme.of(context).brightness;
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
     final Color barColor = brightness == Brightness.dark
@@ -124,10 +204,10 @@ class _FloatingNavBar extends StatelessWidget {
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        _hMargin,
+        _kNavHMargin,
         0,
-        _hMargin,
-        _vMargin + bottomInset,
+        _kNavHMargin,
+        _kNavVMargin + bottomInset,
       ),
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -135,7 +215,8 @@ class _FloatingNavBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: brightness == Brightness.dark ? 0.4 : 0.12),
+              color: Colors.black.withValues(
+                  alpha: brightness == Brightness.dark ? 0.4 : 0.12),
               blurRadius: 24,
               offset: const Offset(0, 8),
             ),
@@ -143,8 +224,8 @@ class _FloatingNavBar extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(
-            vertical: _vPadding,
-            horizontal: _vPadding,
+            vertical: _kNavVPadding,
+            horizontal: _kNavVPadding,
           ),
           child: Row(
             children: List.generate(items.length, (index) {
@@ -187,9 +268,6 @@ class _NavBarItem extends StatelessWidget {
         ? AppColors.textSecondaryDark
         : AppColors.textSecondaryLight;
 
-    final Color iconColor = isSelected ? activeColor : inactiveColor;
-    final Color labelColor = isSelected ? activeColor : inactiveColor;
-
     return Semantics(
       label: item.label,
       selected: isSelected,
@@ -213,7 +291,6 @@ class _NavBarItem extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Icon — scale animation on active.
               AnimatedScale(
                 scale: isSelected ? 1.10 : 1.0,
                 duration: _duration,
@@ -223,22 +300,18 @@ class _NavBarItem extends StatelessWidget {
                   child: Icon(
                     isSelected ? item.activeIcon : item.icon,
                     key: ValueKey(isSelected),
-                    color: iconColor,
+                    color: isSelected ? activeColor : inactiveColor,
                     size: 24,
                   ),
                 ),
               ),
-
               const SizedBox(height: 2),
-
-              // Label with animated color.
               AnimatedDefaultTextStyle(
                 duration: _duration,
                 style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                      color: labelColor,
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.w400,
+                      color: isSelected ? activeColor : inactiveColor,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w400,
                     ),
                 child: Text(item.label),
               ),

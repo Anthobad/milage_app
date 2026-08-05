@@ -147,6 +147,27 @@ _Last updated: 2026-08-05_
 
 ---
 
+### Phase 3.3 — Car Selector Bottom Sheet
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/features/cars/presentation/widgets/vehicle_tile.dart`** — `VehicleTile` reusable row widget. Displays brand + model. Check mark when selected. Edit icon placeholder (no action). `InkWell` tap feedback.
+- **`lib/features/cars/presentation/widgets/car_selector_sheet.dart`** — `showCarSelectorSheet()` free function calls `showModalBottomSheet`. `CarSelectorSheet` `ConsumerWidget` reads `vehicleProvider`. Sub-widgets: `_DragHandle`, `_SheetHeader` (+ and Delete icon placeholders), `_VehicleList` (scrollable), `_EmptyState` ("Create your first vehicle" disabled TextButton). Tapping a vehicle calls `selectVehicle` then closes the sheet.
+- **`lib/app/main_navigation.dart`** — Added `_carsTabIndex = 2`. `_onTabSelected` now takes `BuildContext` and intercepts index 2 to call `showCarSelectorSheet` instead of navigating. The active tab index never changes when Cars is tapped.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Bottom sheet opens over current screen when Cars tab tapped
+- [x] Vehicle list displayed from provider
+- [x] Selected vehicle shows check mark
+- [x] Tapping vehicle updates provider and closes sheet
+- [x] Empty state shown when no vehicles
+
+---
+
 ## Phase 4 — Map System
 
 **Status: ⬜ Not started**
