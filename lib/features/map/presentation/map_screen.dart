@@ -17,9 +17,12 @@ import 'widgets/map_top_bar.dart';
 /// Horizontal margin matching the floating nav bar.
 const double _kHMargin = 16.0;
 
-/// Gap between the map container and the floating nav bar above it.
-/// Sized to sit just above the nav bar (nav bar height ≈ 84dp).
-const double _kBottomMargin = 96.0;
+/// Nav bar static height (mirrors constants in main_navigation.dart).
+/// vMargin(12) + vPadding*2(20) + itemHeight(52) = 84dp
+const double _kNavBarStaticHeight = 84.0;
+
+/// Extra gap between the map bottom edge and the top of the nav bar.
+const double _kMapNavGap = 12.0;
 
 /// Gap below the top safe area before the map container starts.
 const double _kTopMargin = 16.0;
@@ -39,6 +42,11 @@ class MapScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final mapState = ref.watch(mapProvider);
     final topPadding = MediaQuery.of(context).padding.top;
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+
+    // Total bottom padding = nav bar height + system safe area + gap.
+    final double bottomPadding =
+        _kNavBarStaticHeight + bottomInset + _kMapNavGap;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -47,7 +55,7 @@ class MapScreen extends ConsumerWidget {
           left: _kHMargin,
           right: _kHMargin,
           top: topPadding + _kTopMargin,
-          bottom: _kBottomMargin,
+          bottom: bottomPadding,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
