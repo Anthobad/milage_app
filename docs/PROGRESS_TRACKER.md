@@ -110,7 +110,23 @@ _Last updated: 2026-08-05_
 
 ## Phase 3 — Vehicle System
 
-**Status: ⬜ Not started**
+**Status: 🟡 In Progress**
+
+### Phase 3.1 — Vehicle Model
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/features/cars/models/vehicle.dart`** — `VehicleType` enum (sedan, suv, hatchback, coupe, convertible, wagon, pickup, van, minivan, other) with `label`, `value`, and `fromValue()`. `Vehicle` immutable data class with fields: `id`, `brand`, `model`, `year`, `type`, `createdAt`. Includes `copyWith`, `toMap` / `fromMap` serialisation for future database use (Phase 3), `==`, `hashCode`, `toString`.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Vehicle model created
+- [x] VehicleType enum created
+- [x] copyWith method included
+- [x] Serialisation methods included
 
 ---
 
