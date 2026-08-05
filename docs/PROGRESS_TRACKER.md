@@ -130,6 +130,23 @@ _Last updated: 2026-08-05_
 
 ---
 
+### Phase 3.2 — Vehicle State
+
+**Status: ✅ Done**  
+**Completed: 2026-08-05**
+
+#### What was done
+
+- **`lib/features/cars/providers/vehicle_provider.dart`** — `VehicleState` immutable state class holding `List<Vehicle>` and `selectedVehicleId`. `VehicleListNotifier` (`Notifier<VehicleState>`) with `addVehicle`, `updateVehicle`, `deleteVehicle`, `selectVehicle` methods using in-memory state. `vehicleProvider` (`NotifierProvider`) as the primary provider. `selectedVehicleProvider` (`Provider<Vehicle?>`) as a derived convenience provider. Ready for database integration — replace in-memory mutations with repository calls.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Vehicle list managed
+- [x] Selected vehicle managed
+- [x] Add / update / delete / select methods implemented
+
+---
+
 ## Phase 4 — Map System
 
 **Status: ⬜ Not started**
