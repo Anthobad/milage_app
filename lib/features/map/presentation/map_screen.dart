@@ -5,7 +5,10 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
+import '../models/destination.dart';
+import '../providers/destination_provider.dart';
 import '../providers/map_provider.dart';
+import '../services/geocoding_service.dart';
 import '../services/location_service.dart';
 import 'widgets/map_info_bar.dart';
 import 'widgets/map_top_bar.dart';
@@ -35,6 +38,11 @@ const double _kTopMargin = 16.0;
 ///
 /// Displays an OpenStreetMap tile map inside a rounded container.
 /// Handles location permission states with appropriate UI feedback.
+///
+/// Phase 4.2 additions:
+/// - [MapController] attached from [mapProvider] for programmatic camera moves.
+/// - Tap on the map creates a destination via [destinationProvider].
+/// - Destination marker rendered alongside the user location marker.
 class MapScreen extends ConsumerWidget {
   const MapScreen({super.key});
 
@@ -85,7 +93,7 @@ class MapScreen extends ConsumerWidget {
                 Positioned(
                   bottom: 88,
                   right: AppSpacing.md,
-                  child: _RecenterButton(location: mapState.currentLocation!),
+                  child: _RecenterButton(),
                 ),
             ],
           ),
@@ -133,66 +141,103 @@ class _MapBody extends StatelessWidget {
           actionLabel: 'Allow Access',
           isSettings: false,
         ),
-      LocationStatus.ready => _LiveMap(mapState: mapState),
+      LocationStatus.ready => const _LiveMap(),
     };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Live flutter_map
+// Live flutter_map — with destination marker + tap-to-select
 // ---------------------------------------------------------------------------
 
-class _LiveMap extends StatelessWidget {
-  const _LiveMap({required this.mapState});
-
-  final MapState mapState;
+class _LiveMap extends ConsumerWidget {
+  const _LiveMap();
 
   // OSM tile URL template — standard tiles, no API key needed.
-  // Ready for future swap to dark/offline tiles via mapState.mapTheme.
   static const String _osmTileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mapState = ref.watch(mapProvider);
+    final destination = ref.watch(destinationProvider);
+    final mapNotifier = ref.read(mapProvider.notifier);
+
     final center = mapState.currentLocation ?? LocationService.defaultLocation;
 
     return FlutterMap(
+      mapController: mapNotifier.mapController,
       options: MapOptions(
         initialCenter: center,
         initialZoom: 15,
         minZoom: 3,
         maxZoom: 19,
+        // Tap on the map sets the destination.
+        onTap: (tapPosition, point) =>
+            _onMapTap(context, ref, point),
       ),
       children: [
         // Tile layer — OSM standard.
         TileLayer(
           urlTemplate: _osmTileUrl,
           userAgentPackageName: 'com.triprank.app',
-          // Ready for offline tile provider swap in future phase.
         ),
 
-        // User location marker.
-        if (mapState.currentLocation != null)
-          MarkerLayer(
-            markers: [
+        // Markers layer — user location + optional destination.
+        MarkerLayer(
+          markers: [
+            // User location marker.
+            if (mapState.currentLocation != null)
               Marker(
                 point: mapState.currentLocation!,
                 width: 40,
                 height: 40,
-                child: _LocationMarker(),
+                child: const _LocationMarker(),
               ),
-            ],
-          ),
+
+            // Destination marker.
+            if (destination != null)
+              Marker(
+                point: destination.latLng,
+                width: 40,
+                height: 56,
+                // Anchor at the pin tip so the point of the pin sits exactly
+                // on the tapped coordinate.
+                alignment: Alignment.topCenter,
+                child: const _DestinationMarker(),
+              ),
+          ],
+        ),
       ],
     );
+  }
+
+  /// Handle tap: reverse-geocode the point and set destination.
+  void _onMapTap(
+      BuildContext context, WidgetRef ref, LatLng point) async {
+    final geocodingService = const GeocodingService();
+    final name = await geocodingService.reverseLookup(
+      point.latitude,
+      point.longitude,
+    );
+
+    final destination = Destination(
+      name: name,
+      latitude: point.latitude,
+      longitude: point.longitude,
+    );
+
+    ref.read(destinationProvider.notifier).setDestination(destination);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Location marker
+// User location marker
 // ---------------------------------------------------------------------------
 
 class _LocationMarker extends StatelessWidget {
+  const _LocationMarker();
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -212,16 +257,59 @@ class _LocationMarker extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Re-center button
+// Destination marker — pin style
 // ---------------------------------------------------------------------------
 
-class _RecenterButton extends StatelessWidget {
-  const _RecenterButton({required this.location});
-
-  final LatLng location;
+class _DestinationMarker extends StatelessWidget {
+  const _DestinationMarker();
 
   @override
   Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Pin head.
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.red.shade600,
+            border: Border.all(color: Colors.white, width: 2.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.flag_rounded,
+            color: Colors.white,
+            size: 16,
+          ),
+        ),
+        // Pin stem.
+        Container(
+          width: 2.5,
+          height: 10,
+          color: Colors.red.shade600,
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Re-center button
+// ---------------------------------------------------------------------------
+
+class _RecenterButton extends ConsumerWidget {
+  const _RecenterButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final brightness = Theme.of(context).brightness;
     final Color bgColor = brightness == Brightness.dark
         ? AppColors.surfaceDark
@@ -233,9 +321,7 @@ class _RecenterButton extends StatelessWidget {
       elevation: 4,
       child: InkWell(
         customBorder: const CircleBorder(),
-        onTap: () {
-          // Map controller integration in Phase 4.2.
-        },
+        onTap: () => ref.read(mapProvider.notifier).recenterOnUser(),
         child: const Padding(
           padding: EdgeInsets.all(AppSpacing.sm + AppSpacing.xs),
           child: Icon(Icons.my_location, color: AppColors.primary, size: 22),
@@ -323,15 +409,8 @@ class _PermissionView extends ConsumerWidget {
             ),
             const SizedBox(height: AppSpacing.xl),
             FilledButton(
-              onPressed: () {
-                if (isSettings) {
-                  ref
-                      .read(mapProvider.notifier)
-                      .requestPermission();
-                } else {
-                  ref.read(mapProvider.notifier).requestPermission();
-                }
-              },
+              onPressed: () =>
+                  ref.read(mapProvider.notifier).requestPermission(),
               child: Text(actionLabel),
             ),
           ],

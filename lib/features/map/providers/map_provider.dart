@@ -1,3 +1,4 @@
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -11,6 +12,7 @@ import '../services/location_service.dart';
 enum MapTheme {
   /// OpenStreetMap standard tiles (light).
   standard,
+
   /// Future: dark/custom tile server.
   dark,
 }
@@ -57,14 +59,21 @@ class MapState {
 // Notifier
 // ---------------------------------------------------------------------------
 
-/// Manages map state: location permission, current position, map theme.
+/// Manages map state: location permission, current position, map theme,
+/// and camera control via [MapController].
 ///
 /// Architecture is prepared for:
-/// - Destination selection (Phase 4.2)
+/// - Destination selection (Phase 4.2) ✅
 /// - Route preview (Phase 4.3)
 /// - Trip recording (Phase 5)
 class MapNotifier extends Notifier<MapState> {
   late final LocationService _locationService;
+
+  /// The flutter_map [MapController] is owned here so both the map widget and
+  /// other parts of the UI (e.g. re-center button) can share the same instance.
+  ///
+  /// Created eagerly — the widget attaches it via [FlutterMap.mapController].
+  final MapController mapController = MapController();
 
   @override
   MapState build() {
@@ -94,6 +103,26 @@ class MapNotifier extends Notifier<MapState> {
 
   /// Re-request permission (called from the UI permission prompt).
   Future<void> requestPermission() => initLocation();
+
+  /// Animate the map camera to [point] at [zoom].
+  ///
+  /// Safe to call even before the map is attached — the controller will
+  /// silently no-op if it has no map yet.
+  void moveCamera(LatLng point, {double zoom = 15}) {
+    try {
+      mapController.move(point, zoom);
+    } catch (_) {
+      // Controller not yet attached to a map widget — safe to ignore.
+    }
+  }
+
+  /// Re-center map on the user's current location.
+  void recenterOnUser() {
+    final loc = state.currentLocation;
+    if (loc != null) {
+      moveCamera(loc);
+    }
+  }
 
   /// Switch map tile theme — independent from app theme.
   void setMapTheme(MapTheme theme) {

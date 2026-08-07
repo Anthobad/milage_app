@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-05_
+_Last updated: 2026-08-07_
 
 ---
 
@@ -199,7 +199,7 @@ _Last updated: 2026-08-05_
 
 ### Phase 4.1 — Map Foundation
 
-**Status: ✅ Done**  
+**Status: ✅ Done**
 **Completed: 2026-08-05**
 
 #### What was done
@@ -219,6 +219,56 @@ _Last updated: 2026-08-05_
 - [x] Floating top bar with animated search
 - [x] Floating info bar with speed/altitude/distance placeholders
 - [x] Map theme independent from app theme
+
+---
+
+### Phase 4.2 — Destination Selection System
+
+**Status: ✅ Done**
+**Completed: 2026-08-07**
+
+#### What was done
+
+- **`pubspec.yaml`** — Added `http: ^1.2.2` for Nominatim geocoding requests.
+- **`lib/features/map/models/destination.dart`** — `Destination` immutable data class with `id` (optional), `name`, `latitude`, `longitude`. Includes `latLng` getter (LatLng), `copyWith`, `==`, `hashCode`, `toString`.
+- **`lib/features/map/providers/destination_provider.dart`** — `DestinationNotifier` (`Notifier<Destination?>`) with `setDestination()` and `clearDestination()`. `destinationProvider` (`NotifierProvider`) is the single source of truth for the selected destination. UI never mutates destination state directly.
+- **`lib/features/map/services/geocoding_service.dart`** — `GeocodingService` backed by the free Nominatim OpenStreetMap API (no API key). `search(query)` returns a sealed `GeocodingResult` (`GeocodingSuccess` / `GeocodingError`). `reverseLookup(lat, lng)` returns a human-readable place name for map long-press; falls back to a formatted coordinate string on failure.
+- **`lib/features/map/providers/map_provider.dart`** — `MapNotifier` now owns a `MapController` instance. Added `moveCamera(LatLng, {zoom})` and `recenterOnUser()` methods for programmatic camera control. Existing location/permission logic unchanged.
+- **`lib/features/map/presentation/widgets/map_top_bar.dart`** — Converted to `ConsumerStatefulWidget`. Search field is debounced (400 ms) and calls `GeocodingService.search()`. Results render in a styled dropdown below the bar. Selecting a result calls `destinationProvider.setDestination()` and `mapProvider.moveCamera()`, then collapses the search UI. Loading indicator shown during fetch.
+- **`lib/features/map/presentation/map_screen.dart`** — `FlutterMap` wired to `mapProvider.notifier.mapController`. `onLongPress` calls `GeocodingService.reverseLookup()` then sets destination via `destinationProvider`. `MarkerLayer` renders both the user location marker and the destination pin marker (red flag + stem). Re-center FAB now calls `mapProvider.notifier.recenterOnUser()`.
+
+#### Architecture
+
+```
+Search input / Map long-press
+        |
+  GeocodingService (Nominatim)
+        |
+  destinationProvider (Destination?)
+        |
+  MapScreen → MarkerLayer (destination marker)
+        |
+  mapProvider.moveCamera()  ←  camera follows destination
+```
+
+#### Not implemented (per spec)
+- Route calculation / drawing
+- Navigation / Google Maps launch
+- Trip recording / GPS tracking
+- Analytics / database
+
+#### Verification
+- `flutter pub get` → success
+- `flutter analyze` → **No issues found.**
+- [x] Destination model created
+- [x] Destination Riverpod provider created
+- [x] Nominatim geocoding service (free, no API key)
+- [x] Search bar debounced, shows results dropdown
+- [x] Selecting search result moves map camera + sets destination marker
+- [x] Map long-press sets destination with reverse-geocoded name
+- [x] Both flows produce the same Destination object via destinationProvider
+- [x] Re-center button wired to mapProvider.recenterOnUser()
+- [x] No navigation logic implemented
 
 ---
 
