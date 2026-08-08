@@ -6,12 +6,16 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
 import '../models/destination.dart';
+import '../models/route_result.dart';
 import '../providers/destination_provider.dart';
 import '../providers/map_provider.dart';
+import '../providers/route_provider.dart';
 import '../services/geocoding_service.dart';
 import '../services/location_service.dart';
 import 'widgets/map_info_bar.dart';
 import 'widgets/map_top_bar.dart';
+import 'widgets/route_info_bubble.dart';
+import 'widgets/start_drive_button.dart';
 
 // ---------------------------------------------------------------------------
 // Layout constants
@@ -36,13 +40,13 @@ const double _kTopMargin = 16.0;
 
 /// Main map screen.
 ///
-/// Displays an OpenStreetMap tile map inside a rounded container.
-/// Handles location permission states with appropriate UI feedback.
-///
-/// Phase 4.2 additions:
-/// - [MapController] attached from [mapProvider] for programmatic camera moves.
-/// - Tap on the map creates a destination via [destinationProvider].
-/// - Destination marker rendered alongside the user location marker.
+/// Phase 4.3 additions:
+/// - Polyline layer drawn from [routeProvider] when route is ready.
+/// - Camera auto-fits to show the full route when it becomes ready.
+/// - [RouteInfoBubble] overlaid above the info bar (distance + duration).
+/// - [StartDriveButton] placed above the recenter button.
+/// - Subtle loading overlay while route is calculating.
+/// - Error banner with retry button when route calculation fails.
 class MapScreen extends ConsumerWidget {
   const MapScreen({super.key});
 
@@ -69,7 +73,7 @@ class MapScreen extends ConsumerWidget {
           borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
           child: Stack(
             children: [
-              // ── Map or permission state ──────────────────────────────────
+              // ── Map or permission/loading state ──────────────────────────
               _MapBody(mapState: mapState),
 
               // ── Top bar overlay ──────────────────────────────────────────
@@ -80,6 +84,27 @@ class MapScreen extends ConsumerWidget {
                 child: const MapTopBar(),
               ),
 
+              // ── Route error banner ───────────────────────────────────────
+              if (mapState.isReady)
+                Positioned(
+                  top: AppSpacing.md + 52 + AppSpacing.sm, // below top bar
+                  left: AppSpacing.md,
+                  right: AppSpacing.md,
+                  child: const _RouteErrorBanner(),
+                ),
+
+              // ── Route info bubble ────────────────────────────────────────
+              if (mapState.isReady)
+                Positioned(
+                  bottom: 88 + AppSpacing.md + 40, // above controls stack
+                  left: AppSpacing.md,
+                  right: AppSpacing.md,
+                  child: const Align(
+                    alignment: Alignment.center,
+                    child: RouteInfoBubble(),
+                  ),
+                ),
+
               // ── Bottom info bar overlay ──────────────────────────────────
               Positioned(
                 bottom: AppSpacing.md,
@@ -88,13 +113,16 @@ class MapScreen extends ConsumerWidget {
                 child: const MapInfoBar(),
               ),
 
-              // ── Re-center button ─────────────────────────────────────────
-              if (mapState.isReady && mapState.currentLocation != null)
+              // ── Map controls (recenter + start drive) ────────────────────
+              if (mapState.isReady)
                 Positioned(
                   bottom: 88,
                   right: AppSpacing.md,
-                  child: _RecenterButton(),
+                  child: const _MapControls(),
                 ),
+
+              // ── Route calculating overlay ────────────────────────────────
+              if (mapState.isReady) const _RouteLoadingOverlay(),
             ],
           ),
         ),
@@ -147,23 +175,53 @@ class _MapBody extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Live flutter_map — with destination marker + tap-to-select
+// Live flutter_map — polyline + destination + user location
 // ---------------------------------------------------------------------------
 
-class _LiveMap extends ConsumerWidget {
+class _LiveMap extends ConsumerStatefulWidget {
   const _LiveMap();
 
+  @override
+  ConsumerState<_LiveMap> createState() => _LiveMapState();
+}
+
+class _LiveMapState extends ConsumerState<_LiveMap> {
   // OSM tile URL template — standard tiles, no API key needed.
   static const String _osmTileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+  // Track the last route we fitted the camera for so we don't re-fit on
+  // every rebuild (e.g. on orientation changes or parent rebuilds).
+  RouteResult? _lastFittedRoute;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final mapState = ref.watch(mapProvider);
     final destination = ref.watch(destinationProvider);
+    final route = ref.watch(routeProvider);
     final mapNotifier = ref.read(mapProvider.notifier);
 
     final center = mapState.currentLocation ?? LocationService.defaultLocation;
+
+    // Auto-fit camera when a new route becomes ready.
+    if (route.isReady && route != _lastFittedRoute) {
+      _lastFittedRoute = route;
+      // Defer to after the current frame so the map controller is attached.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final points = [
+          // Include current location in the bounds if available.
+          if (mapState.currentLocation != null) mapState.currentLocation!,
+          ...route.coordinates,
+        ];
+        mapNotifier.fitRoute(points);
+      });
+    }
+
+    // Clear the cache if route is reset so we fit again on next route.
+    if (!route.isReady) {
+      _lastFittedRoute = null;
+    }
 
     return FlutterMap(
       mapController: mapNotifier.mapController,
@@ -172,18 +230,30 @@ class _LiveMap extends ConsumerWidget {
         initialZoom: 15,
         minZoom: 3,
         maxZoom: 19,
-        // Tap on the map sets the destination.
-        onTap: (tapPosition, point) =>
-            _onMapTap(context, ref, point),
+        onTap: (tapPosition, point) => _onMapTap(context, ref, point),
       ),
       children: [
-        // Tile layer — OSM standard.
+        // ── Tile layer ──────────────────────────────────────────────────
         TileLayer(
           urlTemplate: _osmTileUrl,
           userAgentPackageName: 'com.triprank.app',
         ),
 
-        // Markers layer — user location + optional destination.
+        // ── Route polyline ──────────────────────────────────────────────
+        if (route.isReady && route.coordinates.isNotEmpty)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: route.coordinates,
+                color: AppColors.primary,
+                strokeWidth: 5.0,
+                borderColor: AppColors.primaryDark.withValues(alpha: 0.4),
+                borderStrokeWidth: 2.0,
+              ),
+            ],
+          ),
+
+        // ── Markers layer ───────────────────────────────────────────────
         MarkerLayer(
           markers: [
             // User location marker.
@@ -201,8 +271,6 @@ class _LiveMap extends ConsumerWidget {
                 point: destination.latLng,
                 width: 40,
                 height: 56,
-                // Anchor at the pin tip so the point of the pin sits exactly
-                // on the tapped coordinate.
                 alignment: Alignment.topCenter,
                 child: const _DestinationMarker(),
               ),
@@ -212,10 +280,9 @@ class _LiveMap extends ConsumerWidget {
     );
   }
 
-  /// Handle tap: reverse-geocode the point and set destination.
-  void _onMapTap(
-      BuildContext context, WidgetRef ref, LatLng point) async {
-    final geocodingService = const GeocodingService();
+  /// Handle map tap: reverse-geocode the point and set destination.
+  void _onMapTap(BuildContext context, WidgetRef ref, LatLng point) async {
+    const geocodingService = GeocodingService();
     final name = await geocodingService.reverseLookup(
       point.latitude,
       point.longitude,
@@ -228,6 +295,226 @@ class _LiveMap extends ConsumerWidget {
     );
 
     ref.read(destinationProvider.notifier).setDestination(destination);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Map controls — Cancel button + Start Drive button + Re-center button
+// ---------------------------------------------------------------------------
+
+class _MapControls extends ConsumerWidget {
+  const _MapControls();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final destination = ref.watch(destinationProvider);
+    final hasDestination = destination != null;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Cancel button — only visible when a destination is chosen.
+        if (hasDestination) ...[
+          const _CancelDestinationButton(),
+          const SizedBox(width: AppSpacing.sm),
+        ],
+
+        // Start Drive button.
+        const StartDriveButton(),
+        const SizedBox(width: AppSpacing.sm),
+
+        // Re-center button.
+        _RecenterButton(),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cancel destination button
+// ---------------------------------------------------------------------------
+
+/// Shown next to the START button when a destination is selected.
+///
+/// Tapping it:
+/// 1. Clears the destination via [destinationProvider] — which automatically
+///    resets the route via [routeProvider]'s `ref.listen`.
+/// 2. Re-centers the camera on the user's current location.
+class _CancelDestinationButton extends ConsumerWidget {
+  const _CancelDestinationButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final brightness = Theme.of(context).brightness;
+    final Color bgColor = brightness == Brightness.dark
+        ? AppColors.surfaceDark
+        : AppColors.surfaceLight;
+
+    return Material(
+      color: bgColor,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+      elevation: 4,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        onTap: () {
+          // Clear destination — routeProvider resets automatically.
+          ref.read(destinationProvider.notifier).clearDestination();
+          // Return camera to user location.
+          ref.read(mapProvider.notifier).recenterOnUser();
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm + AppSpacing.xs,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.close_rounded,
+                size: 18,
+                color: AppColors.error,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Text(
+                'CANCEL',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: AppColors.error,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route calculating loading overlay
+// ---------------------------------------------------------------------------
+
+/// Subtle top-right spinner shown while the route is being fetched.
+/// Does not cover the map — purely informational.
+class _RouteLoadingOverlay extends ConsumerWidget {
+  const _RouteLoadingOverlay();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final route = ref.watch(routeProvider);
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: route.isCalculating
+          ? Center(
+              key: const ValueKey('loading'),
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: AppColors.primary,
+                ),
+              ),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route error banner with retry
+// ---------------------------------------------------------------------------
+
+class _RouteErrorBanner extends ConsumerWidget {
+  const _RouteErrorBanner();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final route = ref.watch(routeProvider);
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      child: route.isError
+          ? _ErrorBanner(
+              key: const ValueKey('error'),
+              message: route.errorMessage ?? 'Route calculation failed.',
+              onRetry: () => ref.read(routeProvider.notifier).retry(),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({
+    super.key,
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              message,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Colors.white,
+                  ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          GestureDetector(
+            onTap: onRetry,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+              ),
+              child: Text(
+                'Retry',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -306,8 +593,6 @@ class _DestinationMarker extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _RecenterButton extends ConsumerWidget {
-  const _RecenterButton();
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final brightness = Theme.of(context).brightness;

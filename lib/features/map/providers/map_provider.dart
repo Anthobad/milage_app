@@ -1,3 +1,4 @@
+import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
@@ -121,6 +122,46 @@ class MapNotifier extends Notifier<MapState> {
     final loc = state.currentLocation;
     if (loc != null) {
       moveCamera(loc);
+    }
+  }
+
+  /// Fit the camera to show all provided [points] with optional [padding].
+  ///
+  /// Called when a route is ready so that the entire polyline (including
+  /// the current location and destination) is visible.
+  ///
+  /// Safe to call even before the map is attached — silently ignored.
+  void fitRoute(
+    List<LatLng> points, {
+    EdgeInsets padding = const EdgeInsets.all(60),
+  }) {
+    if (points.isEmpty) return;
+    try {
+      double minLat = points.first.latitude;
+      double maxLat = points.first.latitude;
+      double minLng = points.first.longitude;
+      double maxLng = points.first.longitude;
+
+      for (final p in points) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLng) minLng = p.longitude;
+        if (p.longitude > maxLng) maxLng = p.longitude;
+      }
+
+      final bounds = LatLngBounds(
+        LatLng(minLat, minLng),
+        LatLng(maxLat, maxLng),
+      );
+
+      mapController.fitCamera(
+        CameraFit.bounds(
+          bounds: bounds,
+          padding: padding,
+        ),
+      );
+    } catch (_) {
+      // MapController not yet attached to a live map — safe to ignore.
     }
   }
 

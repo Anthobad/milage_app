@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-07_
+_Last updated: 2026-08-08_
 
 ---
 
@@ -269,6 +269,71 @@ Search input / Map long-press
 - [x] Both flows produce the same Destination object via destinationProvider
 - [x] Re-center button wired to mapProvider.recenterOnUser()
 - [x] No navigation logic implemented
+
+---
+
+### Phase 4.3 — Route Preview
+
+**Status: ✅ Done**
+**Completed: 2026-08-08**
+
+#### What was done
+
+- **`lib/features/map/models/route_result.dart`** — `RouteStatus` enum (`idle` / `calculating` / `ready` / `error`). `RouteResult` immutable state class holding coordinates, distance, duration, destination, status, and error message. Convenience getters `distanceLabel` and `durationLabel` format values for display. Named factory constructors (`calculating`, `ready`, `error`) for clean state transitions.
+- **`lib/features/map/services/routing_service.dart`** — Abstract `RoutingService` interface. Decoupled from any concrete provider so the backing service can be replaced without touching the UI or state layer.
+- **`lib/features/map/services/osrm_routing_service.dart`** — `OsrmRoutingService` backed by the free public OSRM demo server (no API key). Uses `geometries=geojson` to avoid a polyline-decoder dependency. Returns `RouteResult.ready` on success, `RouteResult.error` on failure — never throws.
+- **`lib/features/map/providers/route_provider.dart`** — `RouteNotifier` (`Notifier<RouteResult>`) with `routeProvider` (`NotifierProvider`). Watches `destinationProvider` via `ref.listen`: auto-calculates route on destination change, resets on destination clear. Guards stale results — discards responses that arrive after the destination has already changed. Exposes `retry()` for the error UI.
+- **`lib/features/map/providers/map_provider.dart`** — Added `fitRoute(List<LatLng>, {EdgeInsets padding})` method. Computes `LatLngBounds` from all route points and calls `mapController.fitCamera(CameraFit.bounds(...))`. Added `flutter/painting.dart` import for `EdgeInsets`.
+- **`lib/features/map/presentation/map_screen.dart`** — `_LiveMap` converted to `ConsumerStatefulWidget`. Watches `routeProvider` and auto-fits camera on new ready route (guarded to avoid re-fitting on every rebuild). `PolylineLayer` added for the route polyline (blue, 5 px stroke with darker border). `_MapControls` column stacks `StartDriveButton` above `_RecenterButton`. `_RouteLoadingOverlay` shows a floating chip while calculating. `_RouteErrorBanner` shows an inline retry banner on error. `RouteInfoBubble` floated above the controls.
+- **`lib/features/map/presentation/widgets/route_info_bubble.dart`** — `RouteInfoBubble` `ConsumerWidget`. Fades in when route is ready. Displays distance and duration as two `_InfoChip` cells with icons and labels inside a rounded pill container.
+- **`lib/features/map/presentation/widgets/start_drive_button.dart`** — `StartDriveButton` `ConsumerWidget`. Always labelled "START". Icon is a spinner while calculating, play arrow otherwise. Colour is green when route is ready, blue otherwise. Tap shows a snackbar placeholder (drive recording comes in Phase 5).
+
+#### Architecture
+
+```
+destinationProvider (Destination?)
+        |
+  RouteNotifier (routeProvider)
+        |
+  OsrmRoutingService → OSRM public API (free, no key)
+        |
+  RouteResult (idle / calculating / ready / error)
+        |
+  ┌─────────────────────────────────┐
+  │ _LiveMap                        │
+  │  • PolylineLayer (route coords) │
+  │  • fitRoute() on ready          │
+  └─────────────────────────────────┘
+  RouteInfoBubble  (distance + duration)
+  StartDriveButton (START / spinner)
+  _RouteLoadingOverlay (calculating chip)
+  _RouteErrorBanner   (error + retry)
+```
+
+#### Not implemented (per spec)
+- Google Maps launching / external navigation
+- Turn-by-turn instructions / voice guidance
+- Trip recording
+- Traffic / rerouting
+
+#### Verification
+- `flutter pub get` → success
+- `flutter analyze` → **No issues found.**
+- [x] RouteStatus enum: idle / calculating / ready / error
+- [x] RouteResult model with distanceLabel / durationLabel
+- [x] Abstract RoutingService interface
+- [x] OsrmRoutingService — free OSRM, no API key, GeoJSON geometry
+- [x] routeProvider auto-triggers on destinationProvider change
+- [x] Stale-result guard prevents out-of-order responses
+- [x] Retry() method for error recovery
+- [x] fitRoute() on MapNotifier fits full route in camera
+- [x] Polyline drawn on map when route is ready
+- [x] Camera auto-fits to route on ready
+- [x] RouteInfoBubble shows distance + duration
+- [x] StartDriveButton (START, spinner while calculating, green when ready)
+- [x] Route loading chip overlay while calculating
+- [x] Route error banner with Retry button
+- [x] Previous route cleared when new destination selected
 
 ---
 
