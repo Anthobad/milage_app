@@ -133,6 +133,7 @@ class DriveState {
     this.errorMessage,
     this.vehicleId,
     this.destination,
+    this.activeTripId,
   });
 
   /// Current lifecycle status.
@@ -173,6 +174,16 @@ class DriveState {
   /// Null for Reckless Mode.  Captured at drive start so the trip record
   /// stores the destination coordinates/name without a second network call.
   final Destination? destination;
+
+  /// Stable UUID assigned at drive start that will be used as the Trip ID.
+  ///
+  /// Assigned once when the drive transitions to [DriveStatus.active] and
+  /// never changes for the lifetime of that drive.  GPS track points are
+  /// persisted incrementally using this ID as the foreign key so they are
+  /// linked to the trip before the trip summary row is created.
+  ///
+  /// Null when idle.
+  final String? activeTripId;
 
   // ---------------------------------------------------------------------------
   // Convenience getters
@@ -231,6 +242,7 @@ class DriveState {
     String? errorMessage,
     Object? vehicleId = _keepSentinel,
     Object? destination = _keepSentinel,
+    Object? activeTripId = _keepSentinel,
   }) {
     return DriveState(
       status: status ?? this.status,
@@ -248,6 +260,9 @@ class DriveState {
       destination: identical(destination, _keepSentinel)
           ? this.destination
           : destination as Destination?,
+      activeTripId: identical(activeTripId, _keepSentinel)
+          ? this.activeTripId
+          : activeTripId as String?,
     );
   }
 

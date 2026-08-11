@@ -107,6 +107,7 @@ class AppDatabase {
     await _createMetadataTable(db);
     await _createVehiclesTable(db);
     await _createTripsTable(db);
+    await _createTrackPointsTable(db);
   }
 
   // ── onUpgrade — incremental migration for existing users ──────────────────
@@ -135,23 +136,10 @@ class AppDatabase {
         await _createTripsTable(db);
         break;
 
-      // ── Version 4 — Phase 5.4: track_points table  (not yet) ─────────────
-      // case 4:
-      //   await db.execute('''
-      //     CREATE TABLE IF NOT EXISTS track_points (
-      //       id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      //       trip_id    TEXT    NOT NULL,
-      //       latitude   REAL    NOT NULL,
-      //       longitude  REAL    NOT NULL,
-      //       altitude   REAL    NOT NULL,
-      //       speed_kmh  REAL    NOT NULL,
-      //       heading    REAL,
-      //       accuracy_m REAL,
-      //       timestamp  TEXT    NOT NULL,
-      //       FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
-      //     )
-      //   ''');
-      //   break;
+      // ── Version 4 — Phase 5.4: trip_track_points table ───────────────────
+      case 4:
+        await _createTrackPointsTable(db);
+        break;
 
       default:
         // ignore: avoid_print
@@ -248,4 +236,40 @@ class AppDatabase {
         ON $kTripsTable (start_time DESC)
     ''');
   }
+
+  /// Creates the [kTrackPointsTable] table.
+  ///
+  /// Schema notes:
+  /// - [trip_id] is NOT NULL with ON DELETE CASCADE — deleting a trip removes
+  ///   all its associated GPS track points automatically.
+  /// - [altitude], [speed_kmh], [accuracy_m], [heading_degrees] are REAL NULL
+  ///   because the location provider may not supply them in all conditions.
+  /// - [timestamp] is an ISO-8601 UTC string for maximum precision.
+  /// - GPS coordinates are stored as REAL (64-bit IEEE 754 double) to preserve
+  ///   full precision — no rounding before persistence.
+  /// - Composite index on (trip_id, timestamp) supports ordered retrieval by
+  ///   trip in chronological order without a separate sort.
+  Future<void> _createTrackPointsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $kTrackPointsTable (
+        id               TEXT    PRIMARY KEY,
+        trip_id          TEXT    NOT NULL
+                                 REFERENCES $kTripsTable(id) ON DELETE CASCADE,
+        timestamp        TEXT    NOT NULL,
+        latitude         REAL    NOT NULL,
+        longitude        REAL    NOT NULL,
+        altitude         REAL,
+        speed_kmh        REAL,
+        accuracy_m       REAL,
+        heading_degrees  REAL
+      )
+    ''');
+
+    // Composite index: fast ordered retrieval of all points for a trip.
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_track_points_trip_time
+        ON $kTrackPointsTable (trip_id, timestamp ASC)
+    ''');
+  }
+
 }

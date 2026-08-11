@@ -6,6 +6,7 @@ import '../features/cars/presentation/cars_screen.dart';
 import '../features/map/presentation/map_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
+import '../features/trips/presentation/trip_stats_screen.dart';
 import 'main_navigation.dart';
 
 /// Route path constants.
@@ -18,12 +19,23 @@ class AppRoutes {
   static const String cars = '/cars';
   static const String analytics = '/analytics';
   static const String profile = '/profile';
+
+  /// Trip Stats screen — [tripId] is a UUID path parameter.
+  ///
+  /// Example: `/trips/3f2a1b0c-…`
+  static const String tripStats = '/trips/:id';
+
+  /// Builds a concrete Trip Stats path for a given [tripId].
+  static String tripStatsPath(String tripId) => '/trips/$tripId';
 }
 
 /// Application router.
 ///
 /// Uses a [StatefulShellRoute] to render [MainNavigation] as the persistent
 /// bottom-nav shell.  Each branch keeps its own navigation stack.
+///
+/// The Trip Stats screen (`/trips/:id`) lives inside the Trips branch so the
+/// bottom nav remains visible and the back-stack returns to the Trips list.
 final GoRouter appRouter = GoRouter(
   initialLocation: AppRoutes.map,
   debugLogDiagnostics: false,
@@ -50,6 +62,16 @@ final GoRouter appRouter = GoRouter(
             GoRoute(
               path: AppRoutes.trips,
               builder: (context, state) => const TripsScreen(),
+              routes: [
+                // Nested route: /trips/:id
+                GoRoute(
+                  path: ':id',
+                  builder: (context, state) {
+                    final tripId = state.pathParameters['id']!;
+                    return TripStatsScreen(tripId: tripId);
+                  },
+                ),
+              ],
             ),
           ],
         ),

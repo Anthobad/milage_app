@@ -15,7 +15,7 @@
 //   Version 1 — Phase 5.1: Foundation (db_metadata table only).
 //   Version 2 — Phase 5.2: vehicles table + selected_vehicle_id metadata key.
 //   Version 3 — Phase 5.3: trips table.
-//   Version 4 — Phase 5.4: track_points table.      (not yet)
+//   Version 4 — Phase 5.4: trip_track_points table.
 //   Version 5 — Phase 5.5: driving_events table.    (not yet)
 //   Version 6 — Phase 5.6: user_preferences table.  (not yet)
 
@@ -29,7 +29,7 @@ const String kDatabaseName = 'triprank.db';
 ///
 /// Increment this by 1 each time the schema changes and add the matching
 /// migration step in [AppDatabase._migrate].
-const int kDatabaseVersion = 3;
+const int kDatabaseVersion = 4;
 
 // ---------------------------------------------------------------------------
 // Table name constants
@@ -43,6 +43,13 @@ const String kVehiclesTable = 'vehicles';
 
 /// Trips table name.
 const String kTripsTable = 'trips';
+
+/// GPS track-point table name.
+///
+/// Each row is one GPS coordinate recorded during an active drive.
+/// Linked to [kTripsTable] via [trip_id] with ON DELETE CASCADE — deleting a
+/// Trip removes all its GPS points automatically.
+const String kTrackPointsTable = 'trip_track_points';
 
 // ---------------------------------------------------------------------------
 // db_metadata key constants

@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11 — Phase 5.3 complete_
+_Last updated: 2026-08-11 — Phase 5.4 complete_
 
 ---
 
@@ -533,7 +533,7 @@ After FINISH:
 
 ## Phase 5 — Trip System
 
-**Status: 🔄 In progress**
+**Status: 🔄 In progress** _(5.1–5.4 complete)_
 
 ### Phase 5.1 — Local Database Foundation
 
@@ -851,6 +851,198 @@ CREATE TABLE trips (
 - [x] Persistence errors logged without crashing
 - [x] Existing vehicle persistence still works
 - [x] Existing Map / Drive / GPS / Reckless Mode / Destination Mode unchanged
+
+---
+
+### Phase 5.4 — GPS Point Persistence & Post-Finish Navigation
+
+**Status: ✅ Done**
+**Completed: 2026-08-11**
+
+#### What was done
+
+- **`lib/core/database/database_config.dart`** — `kDatabaseVersion` was already bumped to 4 and `kTrackPointsTable = 'trip_track_points'` constant already present from prior work.
+- **`lib/core/database/app_database.dart`** — `_createTrackPointsTable()` helper already implemented with full schema + composite index `(trip_id, timestamp ASC)`. `case 4` in `_migrate` creates the table for v3→v4 upgrades. `_onCreate` creates all 4 tables for fresh installs.
+- **`lib/features/trips/models/track_point_record.dart`** _(existing)_ — `TrackPointRecord` durable database model with `id`, `tripId`, `timestamp`, `latitude`, `longitude`, `altitude?`, `speedKmh?`, `accuracyM?`, `headingDegrees?`. `fromTrackPoint()` factory converts live `TrackPoint` to `TrackPointRecord`. `toRow()` / `fromRow()` SQLite serialisation. Full IEEE 754 precision — no rounding.
+- **`lib/features/trips/data/track_point_repository.dart`** _(existing)_ — `TrackPointRepository` with `addTrackPoint` (single, ConflictAlgorithm.ignore for idempotency), `addTrackPoints` (batch transaction), `getTrackPointsForTrip` (chronological ASC), `getTrackPointCount`, `deleteTrackPointsForTrip`, `deleteTrackPoint`. All SQL confined here.
+- **`lib/features/trips/providers/track_point_repository_provider.dart`** _(existing)_ — `Provider<TrackPointRepository>` supplying `TrackPointRepository(appDb.database)`.
+- **`lib/features/map/models/drive_state.dart`** _(existing)_ — `DriveState.activeTripId` field (UUID assigned at drive start, stable FK for incremental GPS persistence before the trip summary row is created).
+- **`lib/features/map/providers/drive_provider.dart`** _(existing)_ — `startDrive()` generates a stable `activeTripId` UUID. `_onDriveUpdate()` calls `_persistTrackPoint()` (fire-and-forget) on every GPS fix — errors logged, drive never crashed. `finishDrive()` calls `_persistTripAndPoints()` which flushes remaining points via `addTrackPoints()` (idempotent), then creates the Trip summary via `TripRepository.createTrip()`. Returns the completed `tripId` on success, `null` on failure.
+- **`lib/features/trips/providers/trip_stats_provider.dart`** _(rewritten)_ — Fixed Riverpod 3.4.2 family API: `TripStatsNotifier extends Notifier<TripStatsState>` with `_tripId` set by the factory lambda. Provider declared as `NotifierProvider.family<TripStatsNotifier, TripStatsState, String>((tripId) => TripStatsNotifier(tripId))` — no explicit `NotifierProviderFamily` annotation (not exported from flutter_riverpod). Loads trip summary and GPS track independently.
+- **`lib/features/trips/presentation/trip_stats_screen.dart`** _(existing)_ — `TripStatsScreen(tripId)` reads `tripStatsProvider(tripId)`. Immediately shows persisted summary stats (distance, duration, speed, altitude). Loads GPS track separately with a loading indicator. Back button navigates to previous screen (Trips list or Map).
+- **`lib/features/map/presentation/widgets/start_drive_button.dart`** _(modified)_ — `_onTap` on FINISH: awaits `finishDrive()` → on success (non-null tripId) invalidates `tripListProvider` then navigates `context.go(AppRoutes.tripStatsPath(tripId))`. On failure (null) shows an error snackbar — never navigates to a non-existent trip.
+- **`lib/features/trips/presentation/trip_screen.dart`** _(minor fix)_ — `separatorBuilder: (_, _)` — fixed `unnecessary_underscores` lint.
+- **`lib/app/router.dart`** _(existing)_ — `/trips/:id` nested route already wired to `TripStatsScreen(tripId)`.
+- **`test/features/trips/track_point_repository_test.dart`** _(new)_ — 36 tests covering all required Phase 5.4 scenarios.
+- **`test/features/trips/trip_repository_test.dart`** _(updated)_ — `_openTestDb()` schema helper now creates all 4 tables (v4). Test 17 `open()` also updated with v4 + `PRAGMA foreign_keys = ON`.
+
+#### Architecture
+
+```
+GPS fix received
+    ↓
+DriveNotifier._onDriveUpdate()
+    ├── DriveState.trackPoints (in-memory path polyline / info bar)
+    └── _persistTrackPoint(point)  ←── fire-and-forget, never blocks GPS
+            ↓
+        TrackPointRepository.addTrackPoint(record)
+            ↓
+          SQLite trip_track_points (using activeTripId as FK)
+
+FINISH pressed
+    ↓
+DriveNotifier.finishDrive()
+    ├── stopDrive() → collect final points
+    ├── _flushTrackPoints()  ←── addTrackPoints() (idempotent batch)
+    ├── TripBuilder.build()  ←── compute summary from trackPoints
+    ├── TripRepository.createTrip()  ←── persist summary
+    └── return tripId  ←── non-null on success
+
+StartDriveButton._onTap (FINISH branch)
+    ↓
+ref.invalidate(tripListProvider)  ←── Trips page will refresh
+context.go(AppRoutes.tripStatsPath(tripId))  ←── immediate navigation
+
+Trip Stats screen
+    ↓
+TripStatsNotifier
+    ├── TripRepository.getTripById()  ←── summary (immediate)
+    └── TrackPointRepository.getTrackPointsForTrip()  ←── track (async)
+```
+
+#### Database version
+- v3 → v4: `CREATE TABLE IF NOT EXISTS trip_track_points (...)` + composite index in `_migrate case 4`
+- Fresh install at v4: all 4 tables created in `_onCreate`
+
+#### Track-point table schema
+```sql
+CREATE TABLE trip_track_points (
+  id               TEXT    PRIMARY KEY,
+  trip_id          TEXT    NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  timestamp        TEXT    NOT NULL,
+  latitude         REAL    NOT NULL,
+  longitude        REAL    NOT NULL,
+  altitude         REAL,
+  speed_kmh        REAL,
+  accuracy_m       REAL,
+  heading_degrees  REAL
+)
+CREATE INDEX idx_track_points_trip_time ON trip_track_points (trip_id, timestamp ASC)
+```
+
+#### Active-drive persistence approach
+- A stable UUID (`activeTripId`) is generated at drive start and stored in `DriveState`.
+- Every GPS fix is persisted immediately via `TrackPointRepository.addTrackPoint()` (fire-and-forget — errors logged, drive continues).
+- `ConflictAlgorithm.ignore` makes all inserts idempotent — duplicate rows are safe to send again.
+- On FINISH, `_flushTrackPoints()` uses `addTrackPoints()` (single transaction) to insert any points that may not have been persisted individually. This is race-safe because duplicates are ignored.
+- The Trip summary row is created **after** all track points are flushed, so foreign key integrity is guaranteed.
+
+#### Post-finish navigation flow
+```
+FINISH → finishDrive() returns tripId
+    ├── tripId != null → ref.invalidate(tripListProvider)
+    │                 → context.go('/trips/$tripId')  → TripStatsScreen
+    └── tripId == null → error snackbar, no navigation
+```
+
+#### Trip Stats integration
+- `TripStatsScreen(tripId)` is the entry point.
+- `TripStatsNotifier` loads the `Trip` summary first (single row — effectively instant) and updates state immediately.
+- GPS track points are loaded in a second async step — `_TrackSection` shows a loading chip until complete.
+- All pre-computed summary statistics (distance, duration, avg/min/max speed, min/max altitude, destination) are available from the first database read with no recalculation.
+
+#### Trips page integration
+- `tripListProvider` is a `FutureProvider` that calls `TripRepository.getAllTrips()`.
+- After a successful FINISH, `ref.invalidate(tripListProvider)` forces a reload on next access.
+- The Trips page shows the new trip at the top of the list (newest first) the next time it is built.
+
+#### Files created
+- `test/features/trips/track_point_repository_test.dart`
+
+#### Files modified
+- `lib/features/map/presentation/widgets/start_drive_button.dart`
+- `lib/features/trips/providers/trip_stats_provider.dart`
+- `lib/features/trips/presentation/trip_screen.dart`
+- `test/features/trips/trip_repository_test.dart`
+
+#### Not implemented (per spec)
+- Final polished Trip Stats UI (map route rendering, speed/altitude graphs)
+- Stop detection
+- Start location reverse-geocoding
+- Advanced driving analytics
+- Cloud synchronization
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- All **75 tests** passed:
+  - 6 Phase 5.1 database foundation tests ✅
+  - 11 Phase 5.2 vehicle repository tests ✅
+  - 21 Phase 5.3 trip repository tests ✅
+  - 36 Phase 5.4 track-point repository tests ✅
+  - 1 app shell smoke test ✅
+- Phase 5.4 tests (36):
+  1. v3→v4 migration creates trip_track_points without data loss
+  2. Existing vehicles survive v3→v4 migration
+  3. Existing trips survive v3→v4 migration
+  4. trip_track_points table exists after v4 schema creation
+  5. Track points can be inserted
+  6. Track points can be retrieved for a trip
+  7. Track points are returned in chronological order
+  8. Track points persist after database close and reopen
+  9. Multiple trips can have separate, isolated track points
+  10. Deleting a Trip cascades to delete its track points
+  11. Deleting a Vehicle does NOT delete Trip track points
+  12. No orphan track points remain after trip deletion
+  13. addTrackPoint inserts a row with all fields
+  14. getTrackPointsForTrip returns correct TrackPointRecord objects
+  15. Empty track returns correctly
+  16. Large GPS track (1000 points) can be inserted and retrieved
+  17. Track points from multiple trips remain isolated
+  18. DriveState.activeTripId is a non-null UUID assigned at drive start
+  19. GPS points persisted incrementally using activeTripId as FK
+  20. addTrackPoints (flush) inserts all points in a single transaction
+  21. Trip summary is persisted via TripRepository at FINISH
+  22. Final Trip contains exactly the track points recorded during drive
+  23. The final GPS point of a drive is not lost
+  24. Duplicate point ID (ignored) does not throw or lose other points
+  25. Completed Trip ID can be obtained after createTrip
+  26. Completed Trip is retrievable by ID after persistence
+  27. Newly completed Trip appears in getAllTrips after persistence
+  28. getTripById returns the exact Trip whose ID was passed at creation
+  29. Persisted summary statistics are immediately available from Trip
+  30. getAllTrips returns the newly completed trip (newest first)
+  31. GPS track loads independently of the trip summary
+  32. getTripById returns null for a non-existent Trip ID
+  33. Nullable GPS fields (altitude, speed, accuracy, heading) round-trip
+  34. GPS coordinates are stored at full IEEE 754 double precision
+  35. getTrackPointCount returns the correct number of points
+  36. deleteTrackPointsForTrip removes all points for the specified trip
+- [x] Database version bumped v3 → v4
+- [x] v3→v4 migration path verified in tests
+- [x] trip_track_points table with ON DELETE CASCADE
+- [x] Composite index (trip_id, timestamp ASC)
+- [x] GPS points persisted incrementally — not waiting until FINISH
+- [x] activeTripId generated at drive start — stable FK before summary row exists
+- [x] Per-point persistence is fire-and-forget — errors logged, drive never crashed
+- [x] Flush on FINISH is idempotent via ConflictAlgorithm.ignore
+- [x] Trip summary created after track-point flush — FK integrity guaranteed
+- [x] FINISH navigates automatically to TripStatsScreen for the completed trip
+- [x] Persistence failure shows error snackbar — no navigation to nonexistent trip
+- [x] tripListProvider invalidated on FINISH — Trips page refreshes
+- [x] TripStatsScreen shows summary immediately, loads GPS track independently
+- [x] Deleting a Trip deletes its track points (ON DELETE CASCADE)
+- [x] Deleting a Vehicle does NOT delete track points (ON DELETE SET NULL on trips)
+- [x] All Phase 5.1 / 5.2 / 5.3 tests still pass
+- [x] Existing Reckless Mode / Destination Mode / background tracking unchanged
+
+#### Physical-device testing still required
+- Verify GPS points accumulate during an active Reckless Mode drive (requires real GPS signal)
+- Verify GPS points accumulate while Google Maps is in the foreground (Destination Mode)
+- Verify track points survive app process kill and restart
+- Verify FINISH navigates to TripStatsScreen on device
+- Verify TripStatsScreen loads summary statistics immediately
+- Verify Trip appears in Trips list after completion
+- Verify Trip and its GPS track persist after device restart
 
 ---
 

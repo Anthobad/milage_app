@@ -3,7 +3,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:sqflite/sqflite.dart';
 
 import 'package:triprank_project/core/database/database_config.dart';
 import 'package:triprank_project/features/cars/data/vehicle_repository.dart';
@@ -20,7 +19,7 @@ void _initFfi() {
   databaseFactory = databaseFactoryFfi;
 }
 
-/// Creates a fresh in-memory database with the full v3 schema (all 3 tables).
+/// Creates a fresh in-memory database with the full v4 schema (all 4 tables).
 Future<Database> _openTestDb() async {
   return databaseFactoryFfi.openDatabase(
     inMemoryDatabasePath,
@@ -28,7 +27,7 @@ Future<Database> _openTestDb() async {
       version: kDatabaseVersion,
       singleInstance: false,
       onConfigure: (db) async {
-        // Enable foreign key enforcement so ON DELETE SET NULL works.
+        // Enable foreign key enforcement so ON DELETE SET NULL / CASCADE works.
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (db, version) async {
@@ -80,6 +79,25 @@ Future<Database> _openTestDb() async {
             'CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON $kTripsTable (vehicle_id)');
         await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_trips_start_time ON $kTripsTable (start_time DESC)');
+        // trip_track_points (v4)
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS $kTrackPointsTable (
+            id               TEXT    PRIMARY KEY,
+            trip_id          TEXT    NOT NULL
+                                     REFERENCES $kTripsTable(id) ON DELETE CASCADE,
+            timestamp        TEXT    NOT NULL,
+            latitude         REAL    NOT NULL,
+            longitude        REAL    NOT NULL,
+            altitude         REAL,
+            speed_kmh        REAL,
+            accuracy_m       REAL,
+            heading_degrees  REAL
+          )
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_track_points_trip_time
+            ON $kTrackPointsTable (trip_id, timestamp ASC)
+        ''');
       },
     ),
   );
@@ -465,6 +483,9 @@ void main() {
           namedPath,
           options: OpenDatabaseOptions(
             version: kDatabaseVersion,
+            onConfigure: (db) async {
+              await db.execute('PRAGMA foreign_keys = ON');
+            },
             onCreate: (db, version) async {
               await db.execute('''
                 CREATE TABLE IF NOT EXISTS $kMetadataTable (
@@ -492,6 +513,20 @@ void main() {
                   minimum_speed_kmh REAL, maximum_speed_kmh REAL,
                   minimum_altitude_m REAL, maximum_altitude_m REAL,
                   stops INTEGER, created_at TEXT NOT NULL
+                )
+              ''');
+              await db.execute('''
+                CREATE TABLE IF NOT EXISTS $kTrackPointsTable (
+                  id TEXT PRIMARY KEY,
+                  trip_id TEXT NOT NULL
+                    REFERENCES $kTripsTable(id) ON DELETE CASCADE,
+                  timestamp TEXT NOT NULL,
+                  latitude REAL NOT NULL,
+                  longitude REAL NOT NULL,
+                  altitude REAL,
+                  speed_kmh REAL,
+                  accuracy_m REAL,
+                  heading_degrees REAL
                 )
               ''');
             },

@@ -7,7 +7,9 @@ import '../models/destination.dart';
 import '../models/drive_state.dart';
 import '../services/drive_controller.dart';
 import '../../cars/providers/vehicle_provider.dart';
+import '../../trips/models/track_point_record.dart';
 import '../../trips/models/trip.dart';
+import '../../trips/providers/track_point_repository_provider.dart';
 import '../../trips/providers/trip_repository_provider.dart';
 import 'map_provider.dart';
 
@@ -23,9 +25,14 @@ import 'map_provider.dart';
 /// - Expose [DriveState] to all widgets that need it.
 /// - Delegate start/stop logic to [DriveController].
 /// - Apply live GPS updates from the controller to the state.
+/// - Assign a stable [activeTripId] (UUID v4) at drive start — used as the
+///   FK for incremental GPS point persistence.
+/// - Persist each GPS point immediately via [TrackPointRepository].
 /// - Capture [vehicleId] and [destination] at drive start so they are
 ///   available for trip persistence at drive end.
 /// - Persist a completed [Trip] via [TripRepository] when FINISH is pressed.
+/// - Return the completed [Trip.id] from [finishDrive] so the UI can navigate
+///   directly to Trip Stats.
 /// - Forward each GPS point to [mapProvider] for the current-location marker.
 /// - Pause/resume the idle location stream around active drives.
 /// - Attempt drive recovery on first build (process restart while drive was active).
@@ -66,8 +73,12 @@ class DriveNotifier extends Notifier<DriveState> {
 
     // Capture the selected vehicle ID now so it is available at trip
     // completion even if the user changes vehicles mid-drive.
-    final vehicleId =
-        ref.read(vehicleProvider).value?.selectedVehicleId;
+    final vehicleId = ref.read(vehicleProvider).value?.selectedVehicleId;
+
+    // Generate the stable trip ID for this drive session now.
+    // GPS points will be persisted with this ID as their FK immediately,
+    // before the completed trip summary row is created.
+    final tripId = const Uuid().v4();
 
     final result = await _controller.startDrive(destination: destination);
 
@@ -79,6 +90,7 @@ class DriveNotifier extends Notifier<DriveState> {
           startedAt: DateTime.now().toUtc(),
           vehicleId: vehicleId,
           destination: destination,
+          activeTripId: tripId,
         );
         // Pause the idle location stream — the foreground service GPS will
         // drive mapProvider.updateCurrentLocation() from here on.
@@ -97,6 +109,7 @@ class DriveNotifier extends Notifier<DriveState> {
           startedAt: DateTime.now().toUtc(),
           vehicleId: vehicleId,
           destination: destination,
+          activeTripId: tripId,
         );
         ref.read(mapProvider.notifier).pauseIdleLocationUpdates();
         return 'Drive tracking started but Google Maps could not be launched.';
@@ -109,13 +122,17 @@ class DriveNotifier extends Notifier<DriveState> {
 
   /// Finish the active drive.
   ///
-  /// 1. Stops the foreground service and collects all track points.
-  /// 2. Builds a [Trip] from the completed [DriveState] via [TripBuilder].
-  /// 3. Persists it via [TripRepository].
-  /// 4. Resets state to idle so the info bar shows placeholders.
-  /// 5. Resumes the idle location stream.
-  Future<void> finishDrive() async {
-    if (!state.isActive) return;
+  /// 1. Stops the foreground service and collects remaining track points.
+  /// 2. Ensures all GPS points are flushed to SQLite.
+  /// 3. Builds a [Trip] from the completed [DriveState] via [TripBuilder].
+  /// 4. Persists the [Trip] via [TripRepository].
+  /// 5. Resets state to idle so the info bar shows placeholders.
+  /// 6. Resumes the idle location stream.
+  ///
+  /// Returns the completed [Trip.id] on success, or null if persistence failed.
+  /// The UI uses this to navigate to Trip Stats immediately.
+  Future<String?> finishDrive() async {
+    if (!state.isActive) return null;
 
     // Capture snapshot before state changes.
     final driveSnapshot = state.copyWith(
@@ -133,32 +150,51 @@ class DriveNotifier extends Notifier<DriveState> {
       finishedAt: driveSnapshot.finishedAt ?? DateTime.now().toUtc(),
     );
 
-    // ── Persist the completed trip ──────────────────────────────────────────
-    await _persistTrip(finishedDrive);
+    // ── Persist completed trip and track points ─────────────────────────────
+    final completedTripId = await _persistTripAndPoints(finishedDrive);
 
     // Reset to idle — active-drive stats must not persist to the next drive.
     state = const DriveState();
 
     // Resume passive location updates (Bug 3 fix).
     ref.read(mapProvider.notifier).resumeIdleLocationUpdates();
+
+    return completedTripId;
   }
 
   /// Explicitly reset to idle.
   ///
   /// Called after a Reckless drive is ended via the confirmation dialog.
-  void resetDrive() {
+  Future<void> resetDrive() async {
+    if (state.isActive) {
+      // Persist the trip even when ending via the dialog.
+      final driveSnapshot = state.copyWith(
+        status: DriveStatus.finishing,
+        finishedAt: DateTime.now().toUtc(),
+      );
+      final points = await _controller.stopDrive();
+      final finishedDrive = driveSnapshot.copyWith(trackPoints: points);
+      await _persistTripAndPoints(finishedDrive);
+    }
     state = const DriveState();
   }
 
   // ---------------------------------------------------------------------------
-  // Trip persistence
+  // Trip + track-point persistence
   // ---------------------------------------------------------------------------
 
-  Future<void> _persistTrip(DriveState drive) async {
+  /// Persists the completed trip summary and ensures all track points are in
+  /// the database.
+  ///
+  /// Returns the trip ID on success, null on failure.
+  Future<String?> _persistTripAndPoints(DriveState drive) async {
     try {
+      final tripId = drive.activeTripId ?? const Uuid().v4();
       final dest = drive.destination;
+
+      // Build the trip summary.
       final trip = TripBuilder.build(
-        tripId: const Uuid().v4(),
+        tripId: tripId,
         vehicleId: drive.vehicleId,
         drive: drive,
         startName: null, // reverse-geocoding at drive start not yet wired
@@ -167,12 +203,48 @@ class DriveNotifier extends Notifier<DriveState> {
         destinationName: dest?.name,
       );
 
-      final repo = ref.read(tripRepositoryProvider);
-      await repo.createTrip(trip);
+      // Flush any track points that are in the final points list but were not
+      // yet persisted individually (edge-case: race between stopDrive and the
+      // per-point persistence path).
+      //
+      // Because addTrackPoint uses ConflictAlgorithm.ignore, re-inserting
+      // already-persisted rows is safe and idempotent.
+      await _flushTrackPoints(drive.trackPoints, tripId);
+
+      // Persist the trip summary row.
+      final tripRepo = ref.read(tripRepositoryProvider);
+      await tripRepo.createTrip(trip);
+
+      return tripId;
     } catch (error, stackTrace) {
       // Do not crash the app on persistence failure.
       // ignore: avoid_print
       print('[DriveNotifier] Trip persistence failed: $error\n$stackTrace');
+      return null;
+    }
+  }
+
+  /// Inserts all [points] into the track-point table under [tripId].
+  ///
+  /// Uses [addTrackPoints] for a single transaction so the flush is atomic.
+  Future<void> _flushTrackPoints(
+    List<TrackPoint> points,
+    String tripId,
+  ) async {
+    if (points.isEmpty) return;
+    try {
+      final trackRepo = ref.read(trackPointRepositoryProvider);
+      final records = points.map((p) {
+        return TrackPointRecord.fromTrackPoint(
+          id: const Uuid().v4(),
+          tripId: tripId,
+          point: p,
+        );
+      }).toList();
+      await trackRepo.addTrackPoints(records);
+    } catch (error, stackTrace) {
+      // ignore: avoid_print
+      print('[DriveNotifier] Track-point flush failed: $error\n$stackTrace');
     }
   }
 
@@ -191,6 +263,11 @@ class DriveNotifier extends Notifier<DriveState> {
           distanceKm: distanceKm,
         );
 
+        // Persist the point incrementally to SQLite.
+        // This is independent of the map UI and continues regardless of
+        // whether the map widget is visible.
+        _persistTrackPoint(point);
+
         // Forward position to the authoritative current-location source (Bug 3 fix).
         ref.read(mapProvider.notifier).updateCurrentLocation(point.latLng);
 
@@ -199,6 +276,30 @@ class DriveNotifier extends Notifier<DriveState> {
         // ignore: avoid_print
         print('[DriveNotifier] GPS error: $message');
     }
+  }
+
+  /// Persists a single [TrackPoint] to SQLite incrementally.
+  ///
+  /// Errors are caught and logged — a single failed write must never crash
+  /// or interrupt the active drive.
+  void _persistTrackPoint(TrackPoint point) {
+    final tripId = state.activeTripId;
+    if (tripId == null) return; // no active trip ID yet — skip
+
+    final record = TrackPointRecord.fromTrackPoint(
+      id: const Uuid().v4(),
+      tripId: tripId,
+      point: point,
+    );
+
+    // Fire-and-forget — intentionally not awaited so the GPS stream is never
+    // blocked by a database write.
+    ref.read(trackPointRepositoryProvider).addTrackPoint(record).catchError(
+      (Object error, StackTrace stack) {
+        // ignore: avoid_print
+        print('[DriveNotifier] Track-point write failed: $error');
+      },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -210,6 +311,11 @@ class DriveNotifier extends Notifier<DriveState> {
     if (persisted == null) return;
 
     _controller.onUpdate = _onDriveUpdate;
+
+    // We cannot recover the activeTripId after a process death (it was not
+    // persisted to SharedPreferences).  Generate a new one so GPS points
+    // arriving after recovery are linked to a valid trip.
+    final recoveredTripId = const Uuid().v4();
 
     state = DriveState(
       status: DriveStatus.active,
@@ -223,6 +329,7 @@ class DriveNotifier extends Notifier<DriveState> {
       currentAltitudeM: persisted.trackPoints.isNotEmpty
           ? persisted.trackPoints.last.altitude
           : 0.0,
+      activeTripId: recoveredTripId,
       // vehicleId and destination are not persisted in SharedPreferences — they
       // will be null after recovery. The trip will still be created with a null
       // vehicleId, which is valid per the schema (ON DELETE SET NULL).

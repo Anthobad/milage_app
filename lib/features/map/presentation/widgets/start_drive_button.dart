@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../../app/router.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../../../trips/presentation/trip_screen.dart';
 import '../../models/drive_state.dart';
 import '../../providers/destination_provider.dart';
 import '../../providers/drive_provider.dart';
@@ -103,12 +106,39 @@ class StartDriveButton extends ConsumerWidget {
     final notifier = ref.read(driveProvider.notifier);
 
     if (status == DriveStatus.active) {
-      // Finish the drive.
-      await notifier.finishDrive();
+      // ── FINISH ────────────────────────────────────────────────────────────
+      //
+      // finishDrive() returns the completed Trip ID on success, or null if
+      // persistence failed.  Navigate to Trip Stats only when we have a valid
+      // ID — never navigate to a non-existent trip.
+      final tripId = await notifier.finishDrive();
+
+      if (!context.mounted) return;
+
+      if (tripId != null) {
+        // Invalidate the trips list so the Trips page shows the new trip
+        // immediately when the user navigates there.
+        ref.invalidate(tripListProvider);
+
+        // Navigate to Trip Stats for the completed trip.
+        context.go(AppRoutes.tripStatsPath(tripId));
+      } else {
+        // Persistence failed — inform the user but do not navigate.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Trip could not be saved. Your drive data may be incomplete.',
+            ),
+            duration: Duration(seconds: 5),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
       return;
     }
 
-    // Start a drive.
+    // ── START ──────────────────────────────────────────────────────────────
     final destination = ref.read(destinationProvider);
     final error = await notifier.startDrive(destination: destination);
 
