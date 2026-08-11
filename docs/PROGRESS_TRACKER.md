@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11_
+_Last updated: 2026-08-11 — Phase 5.1 complete_
 
 ---
 
@@ -533,7 +533,71 @@ After FINISH:
 
 ## Phase 5 — Trip System
 
-**Status: ⬜ Not started**
+**Status: 🔄 In progress**
+
+### Phase 5.1 — Local Database Foundation
+
+**Status: ✅ Done**
+**Completed: 2026-08-11**
+
+#### What was done
+
+- **`pubspec.yaml`** — Added `sqflite: ^2.4.3` and `path: ^1.9.1` as production dependencies. Added `sqflite_common_ffi: ^2.4.2` as a dev dependency for in-VM unit testing (no physical device required).
+- **`lib/core/database/database_config.dart`** — Central constants file. `kDatabaseName = 'triprank.db'`. `kDatabaseVersion = 1`. Includes documented version history for future phases (v2 vehicles, v3 trips, v4 track_points, v5 driving_events, v6 user_preferences). Rules: never lower the version, never use destructive recreation.
+- **`lib/core/database/app_database.dart`** — `AppDatabase` singleton service. Responsibilities: platform-safe path resolution via `getDatabasesPath()` + `path` package (never hard-codes paths), single-connection guard (`isOpen` check before re-opening), `onCreate` callback that creates only the foundation `db_metadata` table and seeds `schema_version`, `onUpgrade` migration dispatcher that runs every version step in order (safe for users who skip releases), `_migrate(db, targetVersion)` switch with stubbed `case 1` and commented `case 2/3` examples for future phases, `onDowngrade` safety fallback (`onDatabaseDowngradeDelete`), clean `close()` that nulls the connection. Application tables (vehicles, trips, track_points, etc.) are NOT created here — they belong to later phases.
+- **`lib/core/database/database_provider.dart`** — Riverpod `Provider<AppDatabase>` that exposes the singleton to the dependency graph. Uses a simple `Provider` (not `FutureProvider`) because all async initialization is completed in `main()` before `ProviderScope` is created. Includes usage documentation for future repository authors.
+- **`lib/main.dart`** — `AppDatabase.instance.initialize()` called and awaited before `runApp()`, after `WidgetsFlutterBinding.ensureInitialized()`. Initialization failures are caught and logged — they do not crash the app.
+- **`test/core/database/app_database_test.dart`** — 6 tests using `sqflite_common_ffi` in-memory database (no device/emulator needed). Covers: initialization succeeds, database accessor available, version matches `kDatabaseVersion`, duplicate `initialize()` calls are no-ops (same connection object), metadata table and `schema_version` seed exist, close + re-initialize round-trip works.
+
+#### Architecture
+
+```
+main()
+  └── AppDatabase.instance.initialize()   (async, before runApp)
+          └── getDatabasesPath() + path.join()  →  triprank.db
+                  └── sqflite.openDatabase(version: 1, onCreate, onUpgrade)
+                          └── _createMetadataTable()   (db_metadata)
+
+Riverpod:
+  databaseProvider  →  AppDatabase.instance
+  (consumed by future repositories — not yet wired to app tables)
+```
+
+#### Database version
+- Version 1 (Foundation — metadata table only)
+
+#### Files created
+- `lib/core/database/app_database.dart`
+- `lib/core/database/database_config.dart`
+- `lib/core/database/database_provider.dart`
+- `test/core/database/app_database_test.dart`
+
+#### Files modified
+- `lib/main.dart` — added database initialization block
+- `pubspec.yaml` — added `sqflite`, `path`, `sqflite_common_ffi`
+
+#### Not implemented (per spec)
+- Vehicle / trip / GPS / analytics tables
+- Database-backed Riverpod providers
+- Any repository layer (reserved for Phase 5.2+)
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All 6 database tests → **passed**
+  1. Database initialization succeeds
+  2. Database can be opened
+  3. Database version matches `kDatabaseVersion` (1)
+  4. Multiple `initialize()` calls do not open duplicate connections
+  5. `db_metadata` table exists with correct `schema_version` seed
+  6. Close then re-initialize round-trip works without errors
+- [x] SQLite database opens on startup without blocking the UI
+- [x] Database path resolved via `getDatabasesPath()` — no hard-coded paths
+- [x] Single connection enforced (singleton + `isOpen` guard)
+- [x] Migration mechanism wired and ready for Phase 5.2+
+- [x] Riverpod provider exposes the database to the dependency graph
+- [x] Existing Map / Drive / GPS features unchanged and working
+- [x] No vehicle / trip / GPS tables created prematurely
 
 ---
 
