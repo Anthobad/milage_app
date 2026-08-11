@@ -17,14 +17,6 @@ import 'database_config.dart';
 /// - Expose the live [Database] connection to repositories.
 /// - Close the connection cleanly.
 ///
-/// ## Usage
-///
-/// ```dart
-/// final db = AppDatabase.instance;
-/// await db.initialize();          // call once at app startup
-/// final conn = db.database;       // use in repositories
-/// ```
-///
 /// ## Extension points (future phases)
 ///
 /// When a new table or schema change is needed:
@@ -77,6 +69,7 @@ class AppDatabase {
     _db = await openDatabase(
       dbPath,
       version: kDatabaseVersion,
+      onConfigure: _onConfigure,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onDowngrade: onDatabaseDowngradeDelete, // safety fallback only
@@ -96,13 +89,24 @@ class AppDatabase {
     return p.join(baseDir, kDatabaseName);
   }
 
+  // ── onConfigure — called before onCreate/onUpgrade ────────────────────────
+
+  /// Enables foreign key constraint enforcement.
+  ///
+  /// SQLite disables foreign key constraints by default. Enabling them here
+  /// ensures that ON DELETE SET NULL (trips → vehicles) is applied correctly.
+  Future<void> _onConfigure(Database db) async {
+    await db.execute('PRAGMA foreign_keys = ON');
+  }
+
   // ── onCreate — full schema for a brand-new install ─────────────────────────
 
   Future<void> _onCreate(Database db, int version) async {
-    // Always create every table that exists at the current [kDatabaseVersion].
-    // This is a fresh install — no migration steps needed.
+    // Create every table that exists at [kDatabaseVersion].
+    // Fresh install — no migration steps needed.
     await _createMetadataTable(db);
     await _createVehiclesTable(db);
+    await _createTripsTable(db);
   }
 
   // ── onUpgrade — incremental migration for existing users ──────────────────
@@ -117,9 +121,7 @@ class AppDatabase {
 
   Future<void> _migrate(Database db, int targetVersion) async {
     switch (targetVersion) {
-      // Version 1 schema is created by _onCreate on a fresh install.
-      // For users upgrading from an older build that somehow had v1,
-      // there is nothing to do here (metadata table already exists).
+      // Version 1 schema is applied by _onCreate on a fresh install.
       case 1:
         break;
 
@@ -128,17 +130,25 @@ class AppDatabase {
         await _createVehiclesTable(db);
         break;
 
-      // ── Version 3 — Phase 5.3: trips table  (not yet) ───────────────────
-      // case 3:
+      // ── Version 3 — Phase 5.3: trips table ──────────────────────────────
+      case 3:
+        await _createTripsTable(db);
+        break;
+
+      // ── Version 4 — Phase 5.4: track_points table  (not yet) ─────────────
+      // case 4:
       //   await db.execute('''
-      //     CREATE TABLE trips (
-      //       id          TEXT PRIMARY KEY,
-      //       vehicle_id  TEXT NOT NULL,
-      //       mode        TEXT NOT NULL,
-      //       start_time  TEXT NOT NULL,
-      //       end_time    TEXT,
-      //       distance_km REAL NOT NULL DEFAULT 0,
-      //       created_at  TEXT NOT NULL
+      //     CREATE TABLE IF NOT EXISTS track_points (
+      //       id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      //       trip_id    TEXT    NOT NULL,
+      //       latitude   REAL    NOT NULL,
+      //       longitude  REAL    NOT NULL,
+      //       altitude   REAL    NOT NULL,
+      //       speed_kmh  REAL    NOT NULL,
+      //       heading    REAL,
+      //       accuracy_m REAL,
+      //       timestamp  TEXT    NOT NULL,
+      //       FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
       //     )
       //   ''');
       //   break;
@@ -151,10 +161,6 @@ class AppDatabase {
 
   // ── Schema helpers ─────────────────────────────────────────────────────────
 
-  /// Creates the [kMetadataTable] key-value table.
-  ///
-  /// Also seeds [kMetaKeySchemaVersion] with the current version so it can
-  /// be verified independently of sqflite's internal version mechanism.
   Future<void> _createMetadataTable(Database db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $kMetadataTable (
@@ -173,16 +179,6 @@ class AppDatabase {
     );
   }
 
-  /// Creates the [kVehiclesTable] table.
-  ///
-  /// Columns match [Vehicle.toMap] / [Vehicle.fromMap]:
-  /// - id         — UUID primary key
-  /// - brand      — manufacturer name (NOT NULL)
-  /// - model      — model name (NOT NULL)
-  /// - year       — integer year (NOT NULL)
-  /// - type       — VehicleType.value string (NOT NULL)
-  /// - created_at — ISO-8601 timestamp (NOT NULL)
-  /// - updated_at — ISO-8601 timestamp, updated on every edit (NOT NULL)
   Future<void> _createVehiclesTable(Database db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $kVehiclesTable (
@@ -194,6 +190,62 @@ class AppDatabase {
         created_at  TEXT    NOT NULL,
         updated_at  TEXT    NOT NULL
       )
+    ''');
+  }
+
+  /// Creates the [kTripsTable] table.
+  ///
+  /// Schema notes:
+  /// - [vehicle_id] is nullable with ON DELETE SET NULL so historical trips
+  ///   survive vehicle deletion.
+  /// - Speed and altitude fields are REAL NULL — computed from track points
+  ///   at completion.  Null when fewer than one point was recorded.
+  /// - [stops] is INTEGER NULL — stop detection is not yet implemented.
+  /// - Timestamps are stored as ISO-8601 UTC strings.
+  /// - [duration_seconds] is an integer (whole seconds).
+  /// - Indexes on [vehicle_id] and [start_time] for efficient queries.
+  Future<void> _createTripsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $kTripsTable (
+        id                      TEXT    PRIMARY KEY,
+        vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+        mode                    TEXT    NOT NULL,
+        start_time              TEXT    NOT NULL,
+        end_time                TEXT    NOT NULL,
+        duration_seconds        INTEGER NOT NULL,
+        distance_km             REAL    NOT NULL,
+
+        start_latitude          REAL    NOT NULL,
+        start_longitude         REAL    NOT NULL,
+        start_name              TEXT,
+
+        destination_latitude    REAL,
+        destination_longitude   REAL,
+        destination_name        TEXT,
+
+        average_speed_kmh       REAL,
+        minimum_speed_kmh       REAL,
+        maximum_speed_kmh       REAL,
+
+        minimum_altitude_m      REAL,
+        maximum_altitude_m      REAL,
+
+        stops                   INTEGER,
+
+        created_at              TEXT    NOT NULL
+      )
+    ''');
+
+    // Index for fast per-vehicle trip history queries.
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id
+        ON $kTripsTable (vehicle_id)
+    ''');
+
+    // Index for chronological sorting.
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_trips_start_time
+        ON $kTripsTable (start_time DESC)
     ''');
   }
 }

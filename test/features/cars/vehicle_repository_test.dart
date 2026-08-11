@@ -2,7 +2,6 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:triprank_project/core/database/database_config.dart';
@@ -26,6 +25,7 @@ Future<Database> _openTestDb() async {
     inMemoryDatabasePath,
     options: OpenDatabaseOptions(
       version: kDatabaseVersion,
+      singleInstance: false,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kMetadataTable (

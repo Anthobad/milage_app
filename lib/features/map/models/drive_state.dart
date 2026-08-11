@@ -1,5 +1,7 @@
 import 'package:latlong2/latlong.dart';
 
+import 'destination.dart';
+
 // ---------------------------------------------------------------------------
 // DriveStatus
 // ---------------------------------------------------------------------------
@@ -129,6 +131,8 @@ class DriveState {
     this.startedAt,
     this.finishedAt,
     this.errorMessage,
+    this.vehicleId,
+    this.destination,
   });
 
   /// Current lifecycle status.
@@ -157,6 +161,18 @@ class DriveState {
 
   /// Non-null when [status] is [DriveStatus.error].
   final String? errorMessage;
+
+  /// ID of the vehicle selected when this drive started.
+  ///
+  /// Captured at [DriveStatus.active] onset and passed to [TripRepository]
+  /// at completion so the trip record references the correct vehicle.
+  final String? vehicleId;
+
+  /// Destination selected for Destination Mode drives.
+  ///
+  /// Null for Reckless Mode.  Captured at drive start so the trip record
+  /// stores the destination coordinates/name without a second network call.
+  final Destination? destination;
 
   // ---------------------------------------------------------------------------
   // Convenience getters
@@ -213,6 +229,8 @@ class DriveState {
     DateTime? startedAt,
     DateTime? finishedAt,
     String? errorMessage,
+    Object? vehicleId = _keepSentinel,
+    Object? destination = _keepSentinel,
   }) {
     return DriveState(
       status: status ?? this.status,
@@ -224,6 +242,12 @@ class DriveState {
       startedAt: startedAt ?? this.startedAt,
       finishedAt: finishedAt ?? this.finishedAt,
       errorMessage: errorMessage ?? this.errorMessage,
+      vehicleId: identical(vehicleId, _keepSentinel)
+          ? this.vehicleId
+          : vehicleId as String?,
+      destination: identical(destination, _keepSentinel)
+          ? this.destination
+          : destination as Destination?,
     );
   }
 
@@ -232,3 +256,6 @@ class DriveState {
       'DriveState(status: $status, mode: $mode, points: ${trackPoints.length}, '
       'dist: ${distanceKm.toStringAsFixed(2)} km, spd: ${currentSpeedKmh.toStringAsFixed(1)} km/h)';
 }
+
+// Sentinel used by copyWith to distinguish "not provided" from explicit null.
+const Object _keepSentinel = Object();

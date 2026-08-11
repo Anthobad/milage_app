@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11 — Phase 5.2 complete_
+_Last updated: 2026-08-11 — Phase 5.3 complete_
 
 ---
 
@@ -701,6 +701,156 @@ Stored as a key-value row in `db_metadata`:
 - [x] Auto-select first vehicle on first add
 - [x] v1 → v2 migration path verified in tests
 - [x] Existing Map / Drive / GPS / Reckless Mode / Destination Mode features unchanged
+
+### Phase 5.3 — Trip Persistence
+
+**Status: ✅ Done**
+**Completed: 2026-08-11**
+
+#### What was done
+
+- **`lib/features/trips/models/trip.dart`** _(new)_ — `TripMode` enum (`reckless`/`destination`) with `fromDriveMode()`. `Trip` immutable data class with all required fields: core (`id`, `vehicleId`, `mode`, `startTime`, `endTime`, `durationSeconds`, `distanceKm`), start location (`startLatitude`, `startLongitude`, `startName?`), destination (`destinationLatitude?`, `destinationLongitude?`, `destinationName?`), summary statistics (`averageSpeedKmh?`, `minimumSpeedKmh?`, `maximumSpeedKmh?`, `minimumAltitudeM?`, `maximumAltitudeM?`, `stops?`), and `createdAt`. `TripBuilder` static helper computes all statistics from `DriveState.trackPoints` at completion time — Trip Details never recalculates from raw points.
+- **`lib/core/database/database_config.dart`** — `kDatabaseVersion` bumped to 3. Added `kTripsTable = 'trips'`. Version history updated.
+- **`lib/core/database/app_database.dart`** — `_onConfigure` added (`PRAGMA foreign_keys = ON` — required for `ON DELETE SET NULL` to work). `_createTripsTable` helper added with full schema + two indexes (`idx_trips_vehicle_id`, `idx_trips_start_time`). `case 3` wired in `_migrate`. `_onCreate` updated to create all three tables for fresh installs at v3.
+- **`lib/features/trips/data/trip_repository.dart`** _(new)_ — `TripRepository` accepts a raw `Database` for testability. Operations: `createTrip`, `getTripById`, `getAllTrips` (newest first), `getTripsForVehicle` (newest first), `getRecentTrips(limit)`, `deleteTrip`. All SQL confined here.
+- **`lib/features/trips/providers/trip_repository_provider.dart`** _(new)_ — `Provider<TripRepository>` supplying `TripRepository(appDb.database)`.
+- **`lib/features/map/models/drive_state.dart`** — Added `vehicleId` and `destination` fields to `DriveState`. Both captured at drive start and available at completion for trip persistence. `copyWith` uses `_keepSentinel` for nullable-safe overrides.
+- **`lib/features/map/providers/drive_provider.dart`** — `startDrive()` reads `vehicleProvider` to capture `vehicleId` and stores it plus `destination` in `DriveState`. `finishDrive()` calls `_persistTrip()` which builds a `Trip` via `TripBuilder` and calls `TripRepository.createTrip()`. Persistence errors are logged — they never crash the app. TODO comment removed.
+- **`test/features/trips/trip_repository_test.dart`** _(new)_ — 21 tests. All use `singleInstance: false` + `onConfigure: PRAGMA foreign_keys = ON` for proper FK enforcement. Tests 4 and 16 insert vehicle rows before creating trips with FK vehicleIds. Test 17 uses a named file path for the close/reopen persistence test. Test 18 simulates v2→v3 migration. Tests 19/20 verify `ON DELETE SET NULL` behavior.
+
+#### Architecture
+
+```
+FINISH pressed
+    ↓
+DriveNotifier.finishDrive()
+    ├── stopDrive() → collect trackPoints
+    ├── TripBuilder.build(drive, vehicleId, destination)
+    │       ├── compute avgSpeed / minSpeed / maxSpeed from trackPoints
+    │       ├── compute minAlt / maxAlt from trackPoints
+    │       └── durationSeconds = endTime - startTime
+    └── TripRepository.createTrip(trip) → SQLite
+
+Drive UI
+    ↓
+DriveNotifier (Notifier<DriveState>)
+    ↓
+TripRepository(Database)
+    ↓
+SQLite — trips table
+```
+
+#### Database migration
+- v2 → v3: `CREATE TABLE IF NOT EXISTS trips (...)` + 2 indexes in `_migrate case 3`
+- Fresh install at v3: all 3 tables created in `_onCreate`
+- `PRAGMA foreign_keys = ON` enforced via `onConfigure`
+
+#### Trips table schema
+```sql
+CREATE TABLE trips (
+  id                      TEXT    PRIMARY KEY,
+  vehicle_id              TEXT    REFERENCES vehicles(id) ON DELETE SET NULL,
+  mode                    TEXT    NOT NULL,
+  start_time              TEXT    NOT NULL,
+  end_time                TEXT    NOT NULL,
+  duration_seconds        INTEGER NOT NULL,
+  distance_km             REAL    NOT NULL,
+  start_latitude          REAL    NOT NULL,
+  start_longitude         REAL    NOT NULL,
+  start_name              TEXT,
+  destination_latitude    REAL,
+  destination_longitude   REAL,
+  destination_name        TEXT,
+  average_speed_kmh       REAL,
+  minimum_speed_kmh       REAL,
+  maximum_speed_kmh       REAL,
+  minimum_altitude_m      REAL,
+  maximum_altitude_m      REAL,
+  stops                   INTEGER,
+  created_at              TEXT    NOT NULL
+)
+```
+
+#### Vehicle/trip relationship
+- `trips.vehicle_id` → `vehicles.id` with `ON DELETE SET NULL`
+- Deleting a vehicle sets `vehicle_id = NULL` on all its trips — historical trips are preserved
+
+#### Statistics availability
+| Statistic | Source | Available |
+|---|---|---|
+| `distanceKm` | `DriveState.distanceKm` | ✅ |
+| `durationSeconds` | `endTime - startTime` | ✅ |
+| `averageSpeedKmh` | mean of `trackPoints.speedKmh` | ✅ (≥1 point) |
+| `minimumSpeedKmh` | min of `trackPoints.speedKmh` | ✅ (≥1 point) |
+| `maximumSpeedKmh` | max of `trackPoints.speedKmh` | ✅ (≥1 point) |
+| `minimumAltitudeM` | min of `trackPoints.altitude` | ✅ (≥1 point) |
+| `maximumAltitudeM` | max of `trackPoints.altitude` | ✅ (≥1 point) |
+| `stops` | Stop detection not yet implemented | ❌ null |
+| `startName` | Reverse-geocoding at start not yet wired | ❌ null (Phase 5.x) |
+
+#### Files created
+- `lib/features/trips/models/trip.dart`
+- `lib/features/trips/data/trip_repository.dart`
+- `lib/features/trips/providers/trip_repository_provider.dart`
+- `test/features/trips/trip_repository_test.dart`
+
+#### Files modified
+- `lib/core/database/database_config.dart`
+- `lib/core/database/app_database.dart`
+- `lib/features/map/models/drive_state.dart`
+- `lib/features/map/providers/drive_provider.dart`
+- `test/features/cars/vehicle_repository_test.dart` (singleInstance: false fix)
+- `test/features/trips/trip_repository_test.dart`
+
+#### Not implemented (per spec)
+- GPS track-point table (Phase 5.4)
+- Trip Details UI
+- Trip History UI
+- Stop detection
+- Start location reverse-geocoding at drive start
+- Cloud synchronization
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All 39 tests → **passed**
+  - 6 Phase 5.1 database foundation tests
+  - 11 Phase 5.2 vehicle repository tests
+  - 21 Phase 5.3 trip repository tests:
+    1. createTrip inserts a row
+    2. getTripById returns the correct trip
+    3. getAllTrips returns all trips
+    4. getTripsForVehicle returns only that vehicle's trips
+    5. getAllTrips returns trips newest first
+    6. Trip mode (reckless/destination) round-trips correctly
+    7. Start/end timestamps round-trip as UTC
+    8. durationSeconds round-trips correctly
+    9. distanceKm round-trips correctly
+    10. Start coordinates round-trip correctly
+    11. startName (nullable) round-trips correctly
+    12. Destination coordinates round-trip correctly
+    13. destinationName round-trips correctly
+    14. Reckless trip stores null destination fields
+    15. Summary statistics round-trip correctly
+    16. Multiple trips can reference the same vehicle
+    17. Trips survive database close and reopen
+    18. v2→v3 migration preserves existing vehicles
+    19. Deleting a vehicle does NOT delete its historical trips
+    20. vehicle_id is NULL on trip after vehicle is deleted
+    21. deleteTrip removes only the specified trip
+  - 1 app shell smoke test
+- [x] Trip model created with all required fields
+- [x] Trips table schema with ON DELETE SET NULL for vehicle FK
+- [x] PRAGMA foreign_keys = ON enforced in AppDatabase
+- [x] v2 → v3 migration path verified in tests
+- [x] TripRepository operations verified
+- [x] finishDrive() persists completed trip via TripRepository
+- [x] vehicleId captured at drive start
+- [x] Destination coordinates/name captured at drive start (offline-first)
+- [x] Summary statistics computed from track points at completion
+- [x] Persistence errors logged without crashing
+- [x] Existing vehicle persistence still works
+- [x] Existing Map / Drive / GPS / Reckless Mode / Destination Mode unchanged
 
 ---
 
