@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11 — Phase 5.4 complete_
+_Last updated: 2026-08-11 — Phase 5.5 complete_
 
 ---
 
@@ -533,7 +533,7 @@ After FINISH:
 
 ## Phase 5 — Trip System
 
-**Status: 🔄 In progress** _(5.1–5.4 complete)_
+**Status: ✅ Completed** _(5.1–5.5 complete)_
 
 ### Phase 5.1 — Local Database Foundation
 
@@ -1043,6 +1043,99 @@ FINISH → finishDrive() returns tripId
 - Verify TripStatsScreen loads summary statistics immediately
 - Verify Trip appears in Trips list after completion
 - Verify Trip and its GPS track persist after device restart
+
+---
+
+### Phase 5.5 — Trips Page & Trip Stats UI
+
+**Status: ✅ Done**
+**Completed: 2026-08-11**
+
+#### What was done
+
+- **`lib/features/trips/providers/trips_filter_provider.dart`** _(new)_ — `TripsFilterState` (searchQuery, startDate, endDate). `TripsFilterNotifier` with `setSearch`, `clearSearch`, `setDateRange`, `clearDateFilter`, `clearAll`. `vehicleTripsProvider` loads only the selected vehicle's trips — returns empty when no vehicle is selected. `filteredTripsProvider` applies search + date filters client-side (AND logic).
+- **`lib/features/trips/presentation/widgets/polyline_thumbnail.dart`** _(new)_ — `PolylineThumbnail` (`CustomPainter`). Dark bg, 4×4 grid, blue polyline scaled to fit square with 15% padding, start (green) / end (red) dots. Geographic bounding-box projection preserves aspect ratio. `dart:ui.Path` used explicitly to avoid the `latlong2.Path<LatLng>` naming collision.
+- **`lib/features/trips/presentation/dialogs/delete_trip_dialog.dart`** _(new)_ — Confirmation dialog; deletes via `TripRepository.deleteTrip`, invalidates `vehicleTripsProvider`. GPS track removed automatically by `ON DELETE CASCADE`. Spinner during delete.
+- **`lib/features/trips/presentation/widgets/trip_card.dart`** _(new)_ — Polyline thumbnail + date/time + destination (or "Free Drive") + vehicle name + avg speed / duration / distance stats row + delete icon (separate tap target). Navigates to Trip Stats on card tap.
+- **`lib/features/trips/presentation/widgets/interactive_graph.dart`** _(new)_ — Shared `InteractiveGraph` widget. `AspectRatio(2.6)`, full screen width, no horizontal scroll. Grid, area fill, line, Y/X axis labels. Touch/drag → nearest point → live tooltip. Used for both speed and altitude graphs.
+- **`lib/features/trips/presentation/widgets/turn_split_bar.dart`** _(new)_ — Two-color bar (blue = left, orange = right) with counts and percentages. "Not available" placeholder when turn data is null; zero-turn state handled.
+- **`lib/features/trips/presentation/trip_screen.dart`** _(replaced)_ — Full Trips page with animated search bar (260 ms fade), `showDateRangePicker` calendar (dark theme), active-filter chips, three distinct empty states (no vehicle / no trips for vehicle / filters with no results).
+- **`lib/features/trips/presentation/trip_stats_screen.dart`** _(replaced)_ — Vertically-scrollable Trip Stats page. 8 sections: header, route map (flutter_map, auto-fit polyline, pan/zoom, start/end markers), core stats card, speed stats card, altitude stats card, speed graph, altitude graph, turn split bar. Summary stats available immediately; GPS track loads independently.
+- **`lib/features/map/presentation/widgets/start_drive_button.dart`** _(modified)_ — Updated `tripListProvider` import → `vehicleTripsProvider` from `trips_filter_provider.dart`.
+
+#### Architecture
+
+```
+TripsScreen
+    ↓
+filteredTripsProvider  (search + date applied client-side)
+    ↓
+vehicleTripsProvider   (FutureProvider — selected vehicle only)
+    ├── selectedVehicleProvider
+    └── TripRepository.getTripsForVehicle()
+tripsFilterProvider    (NotifierProvider)
+
+TripStatsScreen
+    ↓
+tripStatsProvider(tripId)  (NotifierProvider.family)
+    ├── TripRepository.getTripById()       — summary (immediate)
+    └── TrackPointRepository.getTrackPointsForTrip() — track (async)
+```
+
+#### Files created
+- `lib/features/trips/providers/trips_filter_provider.dart`
+- `lib/features/trips/presentation/widgets/polyline_thumbnail.dart`
+- `lib/features/trips/presentation/dialogs/delete_trip_dialog.dart`
+- `lib/features/trips/presentation/widgets/trip_card.dart`
+- `lib/features/trips/presentation/widgets/interactive_graph.dart`
+- `lib/features/trips/presentation/widgets/turn_split_bar.dart`
+- `test/features/trips/trips_filter_test.dart`
+- `test/features/trips/trip_stats_test.dart`
+- `test/features/trips/trip_delete_list_test.dart`
+
+#### Files modified
+- `lib/features/trips/presentation/trip_screen.dart` (full replacement)
+- `lib/features/trips/presentation/trip_stats_screen.dart` (full replacement)
+- `lib/features/map/presentation/widgets/start_drive_button.dart` (provider import fix)
+
+#### Dependencies added
+None. All graphs with `CustomPainter`. Existing `flutter_map` and `latlong2` used.
+
+#### Turn section status
+Turn detection not yet implemented. UI placeholder shown. Will be populated in Phase 6.
+
+#### Functionality not yet available
+- **Stop detection** (`trip.stops` always `null`) — Phase 6.
+- **Left/right turn counts** — Phase 6.
+- **Start location name** — reverse-geocoding not yet wired.
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- All **152 tests** passed:
+  - 75 pre-existing tests (Phases 5.1–5.4 + smoke test) ✅
+  - 34 new filter tests (`trips_filter_test.dart`) ✅
+  - 26 new Trip Stats tests (`trip_stats_test.dart`) ✅
+  - 17 new delete/list tests (`trip_delete_list_test.dart`) ✅
+- [x] Trips page shows only selected vehicle's trips
+- [x] Animated search bar (destination filter, case-insensitive)
+- [x] Calendar date range filter with active indicator
+- [x] Search + date filters combine correctly (AND)
+- [x] Clearing one filter leaves the other active
+- [x] Newest trips first (repository order, not UI sort)
+- [x] Three distinct empty states (no vehicle / no trips / no filter results)
+- [x] Polyline thumbnail scales full route to fit — no cropping
+- [x] Trip card: date/time, destination, vehicle, stats row
+- [x] Delete confirmation dialog + GPS cascade + list refresh
+- [x] Trip card tap → Trip Stats; delete icon tap → confirmation only
+- [x] Trip Stats: scrollable, 8 sections
+- [x] Route map: flutter_map, auto-fit polyline, pan/zoom, start/end markers
+- [x] Speed graph: full width, no horizontal scroll, interactive touch
+- [x] Altitude graph: full width, no horizontal scroll, interactive touch
+- [x] Summary stats available immediately; GPS track loads independently
+- [x] Loading placeholders for GPS-dependent sections
+- [x] Turn split bar: placeholder shown (data not yet available)
+- [x] FINISH → Trip Stats post-drive navigation unchanged
+- [x] vehicleTripsProvider invalidated on FINISH → Trips list refreshes
 
 ---
 

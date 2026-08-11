@@ -213,6 +213,9 @@ class DriveController {
       final Map<String, dynamic> msg =
           jsonDecode(data) as Map<String, dynamic>;
 
+      // ignore: avoid_print
+      print('[DriveController] _onTaskData type:${msg['type']}');
+
       switch (msg['type'] as String?) {
         case 'point':
           final point =
