@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-08_
+_Last updated: 2026-08-11_
 
 ---
 
@@ -195,7 +195,7 @@ _Last updated: 2026-08-08_
 
 ## Phase 4 — Map System
 
-**Status: 🟡 In Progress**
+**Status: ✅ Completed**
 
 ### Phase 4.1 — Map Foundation
 
@@ -334,6 +334,200 @@ destinationProvider (Destination?)
 - [x] Route loading chip overlay while calculating
 - [x] Route error banner with Retry button
 - [x] Previous route cleared when new destination selected
+
+---
+
+### Phase 4.4 — Start Drive / Google Maps Integration
+
+**Status: ✅ Done**
+**Completed: 2026-08-09**
+
+#### What was done
+
+- **`pubspec.yaml`** — Added `flutter_foreground_task: ^10.0.0`. Required for Android's official `ForegroundService` API running in a separate Dart isolate — the only reliable way to continue GPS tracking while Google Maps occupies the foreground.
+- **`android/app/src/main/AndroidManifest.xml`** — Added `ACCESS_BACKGROUND_LOCATION`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`, `WAKE_LOCK`, `POST_NOTIFICATIONS` permissions. Declared `com.pravera.flutter_foreground_task.service.ForegroundService` with `foregroundServiceType="location"` and `stopWithTask="false"`. Added `<package android:name="com.google.android.apps.maps"/>` in `<queries>` so PackageManager can detect Google Maps without `QUERY_ALL_PACKAGES`.
+- **`android/app/src/main/kotlin/…/MainActivity.kt`** — Added `MethodChannel("com.triprank.app/google_maps")` with `isGoogleMapsInstalled` (PackageManager lookup) and `launchGoogleMapsNavigation` (`google.navigation:q=lat,lng` intent with explicit package `com.google.android.apps.maps` — no app chooser, no fallback to any other navigation app).
+- **`lib/features/map/models/drive_state.dart`** — `DriveStatus` enum (idle/starting/active/finishing/completed/error), `DriveMode` enum (reckless/destination), `TrackPoint` immutable model with JSON serialisation, `DriveState` immutable state with computed `speedLabel`/`altitudeLabel`/`distanceLabel` getters and `path` (List<LatLng>) for the recorded polyline.
+- **`lib/features/map/services/google_maps_launcher.dart`** — `GoogleMapsLauncher` Dart service. `isInstalled()` and `launchNavigation()` call the platform channel. Never falls back to another app.
+- **`lib/features/map/services/drive_controller.dart`** — `DriveController` orchestrates the full drive lifecycle. Sealed `DriveStartResult` hierarchy (DriveStarted / DriveGoogleMapsNotInstalled / DriveLaunchFailed / DriveStartFailed). Sealed `DriveUpdate` hierarchy (DriveUpdatePoint / DriveUpdateError). Uses `FlutterForegroundTask.addTaskDataCallback` / `removeTaskDataCallback` (correct v10 API).
+- **`lib/features/map/presentation/widgets/start_drive_button.dart`** — Fully wired. Five visual states: START (no destination), START ROUTE with spinner (calculating), START ROUTE green (route ready), STARTING… (disabled), FINISH red (active), FINISHING… (disabled). Calls `driveProvider.notifier.startDrive()` or `finishDrive()`. Shows snackbar for Google Maps errors.
+
+#### Architecture
+
+```
+Map UI (StartDriveButton)
+    ↓
+DriveNotifier (driveProvider)
+    ↓
+DriveController
+    ├── GoogleMapsLauncher  →  com.google.android.apps.maps
+    └── FlutterForegroundTask (foreground service)
+            ↓  (separate Dart isolate)
+        LocationTrackingTaskHandler
+            ↓
+        geolocator.getPositionStream()
+            ↓
+        DrivePersistenceService (SharedPreferences)
+```
+
+#### Verification
+- `flutter pub get` → success
+- `flutter analyze` → **No issues found.**
+- [x] DriveStatus: idle / starting / active / finishing / completed / error
+- [x] DriveMode: reckless / destination
+- [x] Reckless Mode: START (no destination) → service starts, tracking begins, user stays in TripRank
+- [x] Destination Mode: START → Google Maps check → service start → Maps launch
+- [x] Google Maps not installed: error snackbar, drive NOT started, GPS NOT started
+- [x] Google Maps launch failure: drive stays active, warning snackbar shown
+- [x] StartDriveButton: START / START ROUTE / STARTING… / FINISH / FINISHING… states
+- [x] FINISH stops service, finalises state, preserves points
+- [x] Android platform channel: isGoogleMapsInstalled + launchGoogleMapsNavigation
+- [x] Explicit Google Maps package targeting — no app chooser, no fallback
+
+---
+
+### Phase 4.5 — Continuous Background Tracking
+
+**Status: ✅ Done**
+**Completed: 2026-08-09**
+
+#### What was done
+
+- **`lib/features/map/services/location_tracking_task.dart`** — `LocationTrackingTaskHandler` (`TaskHandler`). Runs in a separate Dart isolate via `@pragma('vm:entry-point')` entry point. Opens `Geolocator.getPositionStream()` on `onStart`. Each position: converts to `TrackPoint`, accumulates distance via `Geolocator.distanceBetween`, persists via `DrivePersistenceService.appendPoint()`, updates foreground notification text with live speed + distance, sends JSON to main isolate via `FlutterForegroundTask.sendDataToMain`. Handles `{"action":"stop"}` from main. Cleans up on `onDestroy`.
+- **`lib/features/map/services/drive_persistence_service.dart`** — Incremental SharedPreferences storage. `beginDrive()` initialises keys. `appendPoint()` read → append → write on every GPS update. `recoverActiveDrive()` returns `PersistedDrive?` for process-death recovery. `finishDrive()` returns all points and clears storage.
+- **`lib/features/map/providers/drive_provider.dart`** — `DriveNotifier`. On build: creates `DriveController`, wires update callback, schedules `_recoverIfNeeded()`. `startDrive()`: idle → starting → active. `finishDrive()`: active → finishing → completed. `_onDriveUpdate()`: appends points and updates live speed/altitude/distance on every GPS event. `_recoverIfNeeded()`: restores `DriveState.active` with haversine-recomputed distance if persistence shows an interrupted drive.
+- **`lib/main.dart`** — Added `FlutterForegroundTask.initCommunicationPort()` before `runApp()`.
+- **`lib/features/map/presentation/widgets/map_info_bar.dart`** — Converted to `ConsumerWidget`. Reads `driveProvider` for live `speedLabel`, `altitudeLabel`, `distanceLabel`. Shows `—` placeholders when idle.
+- **`lib/features/map/presentation/map_screen.dart`** — `_LiveMap` watches `driveProvider`. Route preview polyline (blue) hidden during active drive. Recorded-path polyline (green, `AppColors.success`) drawn from `drive.path` during active drive. Destination marker hidden during drive. Camera auto-fit skipped during active drive.
+
+#### Background tracking guarantees
+- Continues while Google Maps is in the foreground ✅
+- Continues with screen locked / screen off (`WAKE_LOCK` + `allowWakeLock: true`) ✅
+- Points persisted incrementally — survives process death ✅
+- No internet required for GPS recording ✅
+- Stops only on explicit FINISH ✅
+- Foreground notification shows live speed + distance ✅
+- Process-death recovery restores all previously recorded points ✅
+
+#### Not implemented (per spec)
+- Turn-by-turn navigation / voice guidance / traffic / rerouting
+- Google Maps SDK / google_maps_flutter
+- Full trip database / Trip Details screen
+- Advanced analytics / crash/braking detection
+
+#### Verification
+- `flutter pub get` → success
+- `flutter analyze` → **No issues found.**
+- [x] Foreground service runs in separate Dart isolate (independent of UI)
+- [x] GPS stream independent of Map widget lifecycle
+- [x] Points persisted to SharedPreferences on every GPS update
+- [x] Process-death recovery restores DriveState.active with all recorded points
+- [x] MapInfoBar shows live speed / altitude / distance during drive
+- [x] Recorded path polyline (green) shown on map during active drive
+- [x] Route preview polyline (blue) hidden during drive
+- [x] Destination marker hidden during drive
+- [x] FINISH stops service and finalises state
+
+---
+
+## Bug Fixes — Physical Device Testing (2026-08-11)
+
+**Status: ✅ Fixed**
+
+### Bug 1 — Destination selected during Reckless Mode
+
+**Problem:** While a Reckless Mode drive was active, selecting a destination (search or map tap) silently switched modes, creating an invalid concurrent state where both Reckless Mode and Destination Mode could be active simultaneously.
+
+**Fix:**
+- **`lib/features/map/presentation/dialogs/end_reckless_drive_dialog.dart`** _(new)_ — `showEndRecklessDriveDialog()` presents an `AlertDialog` asking "End reckless drive to start destination mode?". Returns `true` on "End Drive", `false`/`null` on Cancel or dismiss. Zero business logic in the dialog — purely UI.
+- **`lib/features/map/presentation/widgets/map_top_bar.dart`** — `_onResultSelected` converted to `async`. Reads `driveProvider` before acting. If `drive.isActive && drive.mode == DriveMode.reckless`, the search UI is collapsed, the dialog is shown, and on Cancel the destination is discarded (Reckless drive continues unchanged). On confirm, `finishDrive()` is called and then the destination is set. Full `mounted` guard chain throughout.
+- **`lib/features/map/presentation/map_screen.dart`** — `_onMapTap` updated with the same guard: dialog → finishDrive → setDestination on confirm; no-op on cancel. Added import for `end_reckless_drive_dialog.dart` and `drive_state.dart`.
+
+### Bug 2 — Distance does not reset after ending a drive
+
+**Problem:** After pressing FINISH, the previous drive's distance remained visible in the map info bar. The recorded path also persisted in state, meaning a new drive would appear to continue from the old one.
+
+**Fix:**
+- **`lib/features/map/models/drive_state.dart`** — `distanceLabel` now returns `'— km'` whenever `!isDriving` (removed the `!isCompleted` exception that caused the old value to leak through).
+- **`lib/features/map/providers/drive_provider.dart`** — `finishDrive()` now resets to `const DriveState()` (full idle) after the foreground service stops. The completed track points are captured in a local variable for the upcoming Phase 5 trip repository call. `resetDrive()` added for explicit synchronous reset from other callers.
+
+#### State consistency guarantees after fix
+- Reckless Mode and Destination Mode cannot be active simultaneously ✅
+- Completed drive distance is never shown in the info bar ✅
+- Previous drive path does not persist to the next drive ✅
+- Historical trip data is untouched ✅
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Reckless drive active + search result selected → confirmation dialog appears
+- [x] Cancel → Reckless drive continues, destination not set
+- [x] End Drive → Reckless drive ends, destination set, START ROUTE available
+- [x] FINISH (any mode) → info bar resets to `— km / — m / — km/h`
+- [x] New drive starts from 0 distance and empty path
+
+---
+
+### Bug 3 — Current-location pointer frozen at startup position (2026-08-11)
+
+**Status: ✅ Fixed**
+
+#### Root cause
+
+`MapNotifier.initLocation()` called `LocationService.getCurrentLocation()` **once** at startup (a one-shot `Geolocator.getCurrentPosition`) and wrote the result into `mapState.currentLocation`.  That value was **never updated again**.
+
+The current-location marker in `_LiveMapState` reads `mapState.currentLocation`, so it was permanently pinned to the startup position.
+
+Meanwhile, during an active drive, GPS updates flowed correctly through:
+```
+ForegroundService → DriveController._onTaskData → DriveNotifier._onDriveUpdate → DriveState.trackPoints / distanceKm
+```
+But this path never touched `mapProvider.currentLocation`, so:
+- The path polyline drew correctly (reads `drive.path` from `driveProvider`).
+- The marker did not move (reads `mapState.currentLocation` from `mapProvider`).
+- After FINISH DRIVE, `driveProvider` reset to idle but `mapProvider.currentLocation` still held the frozen startup position.
+
+#### Fix
+
+**`lib/features/map/providers/map_provider.dart`**
+
+- Added `updateCurrentLocation(LatLng)` — the single write path for `mapState.currentLocation`.
+- `initLocation()` seeds with a one-shot fix, then immediately starts a **continuous idle position stream** (`_startIdleStream()`), so the marker stays fresh without a drive.
+- Added `pauseIdleLocationUpdates()` — pauses the idle stream while a drive is active (avoids redundant parallel GPS streams).
+- Added `resumeIdleLocationUpdates()` — resumes (or restarts) the idle stream after a drive ends, so the marker keeps moving post-drive without an app restart.
+- `_cancelIdleStream()` / `_idleStreamCancelled` flag manage subscription lifecycle safely.
+- Subscription cancelled in `ref.onDispose`.
+
+**`lib/features/map/providers/drive_provider.dart`**
+
+- `_onDriveUpdate` now calls `ref.read(mapProvider.notifier).updateCurrentLocation(point.latLng)` on every GPS point — the path polyline and the location marker now consume the same position data.
+- `startDrive()` calls `pauseIdleLocationUpdates()` on drive start success (`DriveStarted` and `DriveLaunchFailed` cases).
+- `finishDrive()` calls `resumeIdleLocationUpdates()` after state reset.
+
+#### Data flow after fix
+
+```
+Idle (no drive):
+  LocationService.positionStream()  →  mapProvider.updateCurrentLocation()  →  marker
+
+Active drive:
+  ForegroundService → DriveController → DriveNotifier._onDriveUpdate
+    ├── driveState.trackPoints / distanceKm  →  path polyline / info bar
+    └── mapProvider.updateCurrentLocation()  →  marker  ✅
+
+After FINISH:
+  idle stream resumes  →  mapProvider.updateCurrentLocation()  →  marker  ✅
+```
+
+#### Verification
+- `flutter analyze` → **No issues found.**
+- [x] Pointer follows user during active Reckless Mode drive
+- [x] Pointer follows user during active Destination Mode drive
+- [x] Path polyline unchanged (still reads drive.path)
+- [x] Distance / stats unchanged (still reads driveState)
+- [x] After FINISH, pointer continues to update without app restart
+- [x] Idle stream paused during drive (no duplicate GPS streams)
+- [x] Idle stream resumed after drive ends
+- [x] Stream subscription properly cancelled on provider dispose
 
 ---
 

@@ -42,6 +42,11 @@ dependencies:
   geolocator: ^14.0.3
   latlong2: ^0.10.1
   http: ^1.6.0
+  # Required for Android foreground location service.
+  # flutter_foreground_task runs a true Android ForegroundService in a separate
+  # Dart isolate so that GPS recording continues while the app is in the
+  # background (e.g. while Google Maps is in the foreground).
+  flutter_foreground_task: ^10.0.0
 
 dev_dependencies:
   flutter_test:

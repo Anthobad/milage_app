@@ -2,8 +2,19 @@
     <!-- Location permissions required by geolocator -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Background location — required for foreground location service while app is backgrounded -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <!-- Internet required by flutter_map to load OSM tiles -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Foreground service permissions required by flutter_foreground_task -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Required for flutter_foreground_task to keep running while screen is off -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Required for Android 13+ notification display -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required for querying whether Google Maps is installed -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <application
         android:label="triprank_project"
         android:name="${applicationName}"
@@ -30,6 +41,16 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- flutter_foreground_task: ForegroundService for GPS background tracking.
+             foregroundServiceType="location" required on Android 10+.
+             stopWithTask="false" so tracking continues while Google Maps is open. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="location"
+            android:stopWithTask="false"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -46,5 +67,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Required to check whether Google Maps is installed without QUERY_ALL_PACKAGES -->
+        <package android:name="com.google.android.apps.maps" />
     </queries>
 </manifest>

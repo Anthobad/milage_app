@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../../providers/drive_provider.dart';
 
 /// Minimal floating info bar shown at the bottom of the map.
 ///
-/// Displays speed, altitude, and distance placeholders.
-/// Values will be driven by trip recording state in Phase 5.
-class MapInfoBar extends StatelessWidget {
+/// When a drive is active, shows live speed, altitude, and distance from
+/// [driveProvider]. Otherwise shows placeholder dashes.
+class MapInfoBar extends ConsumerWidget {
   const MapInfoBar({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final drive = ref.watch(driveProvider);
+
     final brightness = Theme.of(context).brightness;
     final Color barColor = brightness == Brightness.dark
         ? AppColors.surfaceDark.withValues(alpha: 0.92)
@@ -33,14 +37,14 @@ class MapInfoBar extends StatelessWidget {
         horizontal: AppSpacing.lg,
         vertical: AppSpacing.sm,
       ),
-      child: const Row(
+      child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _InfoItem(label: 'Speed', value: '— km/h'),
-          _Divider(),
-          _InfoItem(label: 'Altitude', value: '— m'),
-          _Divider(),
-          _InfoItem(label: 'Distance', value: '— km'),
+          _InfoItem(label: 'Speed', value: drive.speedLabel),
+          const _Divider(),
+          _InfoItem(label: 'Altitude', value: drive.altitudeLabel),
+          const _Divider(),
+          _InfoItem(label: 'Distance', value: drive.distanceLabel),
         ],
       ),
     );

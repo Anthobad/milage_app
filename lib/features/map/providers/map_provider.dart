@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -63,10 +65,24 @@ class MapState {
 /// Manages map state: location permission, current position, map theme,
 /// and camera control via [MapController].
 ///
-/// Architecture is prepared for:
-/// - Destination selection (Phase 4.2) ✅
-/// - Route preview (Phase 4.3)
-/// - Trip recording (Phase 5)
+/// ## Single authoritative location source
+///
+/// [state.currentLocation] is the one and only source of truth for the
+/// user's current position.  It is updated by two complementary paths:
+///
+/// 1. **Idle passive stream** — when no drive is active, [initLocation]
+///    subscribes to [LocationService.positionStream] with a light filter.
+///    Every position update flows into [updateCurrentLocation] so the marker
+///    stays fresh even without a drive.
+///
+/// 2. **Active drive forwarding** — while a drive is running the foreground
+///    service produces high-frequency GPS points.  [DriveNotifier._onDriveUpdate]
+///    calls [updateCurrentLocation] for each point so the marker follows the
+///    user in real-time.  The idle stream is **paused** while a drive is
+///    active to avoid redundant position requests.
+///
+/// The idle stream is resumed automatically by [resumeIdleLocationUpdates]
+/// after a drive ends, so the marker keeps moving without an app restart.
 class MapNotifier extends Notifier<MapState> {
   late final LocationService _locationService;
 
@@ -76,15 +92,33 @@ class MapNotifier extends Notifier<MapState> {
   /// Created eagerly — the widget attaches it via [FlutterMap.mapController].
   final MapController mapController = MapController();
 
+  /// Passive background position stream used when no drive is active.
+  StreamSubscription<dynamic>? _idlePositionSub;
+
+  /// True after [_cancelIdleStream] has been called, so [resumeIdleLocationUpdates]
+  /// knows to restart rather than resume a dead subscription.
+  bool _idleStreamCancelled = false;
+
   @override
   MapState build() {
     _locationService = const LocationService();
+
+    // Cancel the idle stream when this provider is destroyed.
+    ref.onDispose(_cancelIdleStream);
+
     // Request location on first build.
     Future.microtask(initLocation);
     return const MapState();
   }
 
-  /// Check permission and fetch current location.
+  // ---------------------------------------------------------------------------
+  // Public API — location
+  // ---------------------------------------------------------------------------
+
+  /// Check permission, then start a continuous idle position stream that keeps
+  /// [state.currentLocation] fresh whenever no drive is active.
+  ///
+  /// Safe to call multiple times — any existing idle stream is cancelled first.
   Future<void> initLocation() async {
     state = state.copyWith(isLoadingLocation: true);
 
@@ -92,11 +126,19 @@ class MapNotifier extends Notifier<MapState> {
     state = state.copyWith(locationStatus: status);
 
     if (status == LocationStatus.ready) {
+      // ── Seed with a quick one-shot fix so the marker appears immediately ──
       final location = await _locationService.getCurrentLocation();
-      state = state.copyWith(
-        currentLocation: location,
-        isLoadingLocation: false,
-      );
+      if (location != null) {
+        state = state.copyWith(
+          currentLocation: location,
+          isLoadingLocation: false,
+        );
+      } else {
+        state = state.copyWith(isLoadingLocation: false);
+      }
+
+      // ── Then subscribe to the continuous stream for ongoing updates ────────
+      _startIdleStream();
     } else {
       state = state.copyWith(isLoadingLocation: false);
     }
@@ -104,6 +146,44 @@ class MapNotifier extends Notifier<MapState> {
 
   /// Re-request permission (called from the UI permission prompt).
   Future<void> requestPermission() => initLocation();
+
+  /// Push a new GPS position into [state.currentLocation].
+  ///
+  /// Called by:
+  /// - The idle position stream (passive updates when not driving).
+  /// - [DriveNotifier._onDriveUpdate] on every GPS point during a drive.
+  ///
+  /// This is the **single write path** for the current-location marker,
+  /// ensuring the pointer always reflects the latest known position regardless
+  /// of whether a drive is active.
+  void updateCurrentLocation(LatLng position) {
+    state = state.copyWith(currentLocation: position);
+  }
+
+  /// Pause the idle position stream.
+  ///
+  /// Called by [DriveNotifier] when a drive starts so we are not running two
+  /// parallel GPS streams simultaneously.
+  void pauseIdleLocationUpdates() {
+    _idlePositionSub?.pause();
+  }
+
+  /// Resume (or restart) the idle position stream after a drive ends.
+  ///
+  /// Called by [DriveNotifier] after [finishDrive] so the marker keeps moving
+  /// without requiring an app restart.
+  void resumeIdleLocationUpdates() {
+    if (_idlePositionSub == null || _idleStreamCancelled) {
+      // Stream was never started or was cancelled — restart it.
+      _startIdleStream();
+    } else {
+      _idlePositionSub!.resume();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera control
+  // ---------------------------------------------------------------------------
 
   /// Animate the map camera to [point] at [zoom].
   ///
@@ -168,6 +248,34 @@ class MapNotifier extends Notifier<MapState> {
   /// Switch map tile theme — independent from app theme.
   void setMapTheme(MapTheme theme) {
     state = state.copyWith(mapTheme: theme);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal — idle position stream
+  // ---------------------------------------------------------------------------
+
+  /// Start a low-frequency position stream used when no drive is active.
+  ///
+  /// A 10-metre filter keeps the idle stream from firing constantly while the
+  /// user is stationary, while still catching meaningful position changes.
+  void _startIdleStream() {
+    _cancelIdleStream();
+    _idleStreamCancelled = false;
+    _idlePositionSub = _locationService.positionStream().listen(
+      (position) {
+        updateCurrentLocation(LatLng(position.latitude, position.longitude));
+      },
+      onError: (_) {
+        // Idle stream errors are non-fatal — the last known position is kept.
+      },
+      cancelOnError: false,
+    );
+  }
+
+  void _cancelIdleStream() {
+    _idlePositionSub?.cancel();
+    _idlePositionSub = null;
+    _idleStreamCancelled = true;
   }
 }
 

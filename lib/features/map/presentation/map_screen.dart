@@ -6,12 +6,15 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
 import '../models/destination.dart';
+import '../models/drive_state.dart';
 import '../models/route_result.dart';
 import '../providers/destination_provider.dart';
+import '../providers/drive_provider.dart';
 import '../providers/map_provider.dart';
 import '../providers/route_provider.dart';
 import '../services/geocoding_service.dart';
 import '../services/location_service.dart';
+import 'dialogs/end_reckless_drive_dialog.dart';
 import 'widgets/map_info_bar.dart';
 import 'widgets/map_top_bar.dart';
 import 'widgets/route_info_bubble.dart';
@@ -199,12 +202,13 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
     final mapState = ref.watch(mapProvider);
     final destination = ref.watch(destinationProvider);
     final route = ref.watch(routeProvider);
+    final drive = ref.watch(driveProvider);
     final mapNotifier = ref.read(mapProvider.notifier);
 
     final center = mapState.currentLocation ?? LocationService.defaultLocation;
 
-    // Auto-fit camera when a new route becomes ready.
-    if (route.isReady && route != _lastFittedRoute) {
+    // Auto-fit camera when a new route becomes ready (only when no drive active).
+    if (route.isReady && route != _lastFittedRoute && !drive.isDriving) {
       _lastFittedRoute = route;
       // Defer to after the current frame so the map controller is attached.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -239,8 +243,8 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
           userAgentPackageName: 'com.triprank.app',
         ),
 
-        // ── Route polyline ──────────────────────────────────────────────
-        if (route.isReady && route.coordinates.isNotEmpty)
+        // ── Route preview polyline (shown before drive starts) ──────────
+        if (!drive.isDriving && route.isReady && route.coordinates.isNotEmpty)
           PolylineLayer(
             polylines: [
               Polyline(
@@ -248,6 +252,20 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
                 color: AppColors.primary,
                 strokeWidth: 5.0,
                 borderColor: AppColors.primaryDark.withValues(alpha: 0.4),
+                borderStrokeWidth: 2.0,
+              ),
+            ],
+          ),
+
+        // ── Recorded drive path polyline (shown during active drive) ────
+        if (drive.isDriving && drive.path.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: drive.path,
+                color: AppColors.success,
+                strokeWidth: 5.0,
+                borderColor: AppColors.success.withValues(alpha: 0.3),
                 borderStrokeWidth: 2.0,
               ),
             ],
@@ -265,8 +283,8 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
                 child: const _LocationMarker(),
               ),
 
-            // Destination marker.
-            if (destination != null)
+            // Destination marker — hidden while drive is active.
+            if (destination != null && !drive.isDriving)
               Marker(
                 point: destination.latLng,
                 width: 40,
@@ -281,6 +299,10 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
   }
 
   /// Handle map tap: reverse-geocode the point and set destination.
+  ///
+  /// If a Reckless Mode drive is active, shows a confirmation dialog before
+  /// ending the drive and setting the new destination.  This prevents the
+  /// invalid state of Reckless + Destination modes being active simultaneously.
   void _onMapTap(BuildContext context, WidgetRef ref, LatLng point) async {
     const geocodingService = GeocodingService();
     final name = await geocodingService.reverseLookup(
@@ -288,12 +310,33 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
       point.longitude,
     );
 
+    if (!context.mounted) return;
+
     final destination = Destination(
       name: name,
       latitude: point.latitude,
       longitude: point.longitude,
     );
 
+    final drive = ref.read(driveProvider);
+
+    // ── Reckless drive active: confirm before switching to destination mode ──
+    if (drive.isActive && drive.mode == DriveMode.reckless) {
+      final confirmed = await showEndRecklessDriveDialog(context);
+
+      if (!context.mounted) return;
+      if (confirmed != true) {
+        // User cancelled — keep Reckless drive unchanged, discard destination.
+        return;
+      }
+
+      // End the Reckless drive before setting the destination.
+      await ref.read(driveProvider.notifier).finishDrive();
+
+      if (!context.mounted) return;
+    }
+
+    // Set destination — the START ROUTE button will now be available.
     ref.read(destinationProvider.notifier).setDestination(destination);
   }
 }
@@ -308,14 +351,16 @@ class _MapControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final destination = ref.watch(destinationProvider);
+    final drive = ref.watch(driveProvider);
     final hasDestination = destination != null;
+    final isDriving = drive.isDriving;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Cancel button — only visible when a destination is chosen.
-        if (hasDestination) ...[
+        // Cancel button — visible when a destination is chosen AND no drive is active.
+        if (hasDestination && !isDriving) ...[
           const _CancelDestinationButton(),
           const SizedBox(width: AppSpacing.sm),
         ],

@@ -6,9 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
 import '../../models/destination.dart';
+import '../../models/drive_state.dart';
 import '../../providers/destination_provider.dart';
+import '../../providers/drive_provider.dart';
 import '../../providers/map_provider.dart';
 import '../../services/geocoding_service.dart';
+import '../dialogs/end_reckless_drive_dialog.dart';
 
 // ---------------------------------------------------------------------------
 // MapTopBar
@@ -147,15 +150,39 @@ class _MapTopBarState extends ConsumerState<MapTopBar>
     });
   }
 
-  void _onResultSelected(Destination destination) {
-    // 1. Save to provider.
+  Future<void> _onResultSelected(Destination destination) async {
+    final drive = ref.read(driveProvider);
+
+    // ── Reckless drive active: ask before switching to destination mode ──────
+    // Selecting a destination while Reckless Mode is running must never silently
+    // switch modes.  Show a confirmation dialog first.
+    if (drive.isActive && drive.mode == DriveMode.reckless) {
+      // Collapse search first so the dialog renders on top cleanly.
+      _collapseSearch();
+
+      if (!mounted) return;
+      final confirmed = await showEndRecklessDriveDialog(context);
+
+      if (!mounted) return;
+      if (confirmed != true) {
+        // User cancelled — keep Reckless drive running, discard the destination.
+        return;
+      }
+
+      // User confirmed → end the Reckless drive, then set the destination.
+      await ref.read(driveProvider.notifier).finishDrive();
+    } else {
+      // Normal path — collapse search UI immediately.
+      _collapseSearch();
+    }
+
+    if (!mounted) return;
+
+    // 1. Save destination to provider (drive is now idle / not reckless).
     ref.read(destinationProvider.notifier).setDestination(destination);
 
-    // 2. Move the map camera to the selected destination.
+    // 2. Move map camera to the selected destination.
     ref.read(mapProvider.notifier).moveCamera(destination.latLng);
-
-    // 3. Collapse search UI.
-    _collapseSearch();
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
