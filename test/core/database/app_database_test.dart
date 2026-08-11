@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:triprank_project/core/database/app_database.dart';
 import 'package:triprank_project/core/database/database_config.dart';
@@ -9,30 +10,30 @@ import 'package:triprank_project/core/database/database_config.dart';
 // Test setup helpers
 // ---------------------------------------------------------------------------
 
-/// Overrides the sqflite factory with the FFI in-memory implementation so
-/// tests can run on the Dart VM (CI, desktop, `flutter test`) without a
-/// physical device or emulator.
-///
-/// Must be called once before any test that opens a database.
+/// Overrides the sqflite factory with the FFI implementation so tests can
+/// run on the Dart VM (CI, desktop, `flutter test`) without a physical device.
 void _initFfiForTests() {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 }
 
-/// Opens a fresh in-memory [AppDatabase] isolated from all other tests.
+/// Resolves the path that [AppDatabase] will use for the test DB file.
 ///
-/// Uses [inMemoryDatabasePath] so each call produces an independent database
-/// that is discarded when [AppDatabase.close] is called.  This isolates tests
-/// from one another and from the production database file.
+/// sqflite_common_ffi writes to a real directory, so we must delete the file
+/// between tests to guarantee a fresh schema on every open.
+Future<String> _testDbPath() async {
+  final baseDir = await databaseFactoryFfi.getDatabasesPath();
+  return p.join(baseDir, kDatabaseName);
+}
+
+/// Deletes the test database file if it exists.
+Future<void> _deleteTestDb() async {
+  final path = await _testDbPath();
+  await databaseFactoryFfi.deleteDatabase(path);
+}
+
+/// Opens a fresh [AppDatabase] backed by a new on-disk (ffi) file.
 Future<AppDatabase> _openTestDatabase() async {
-  // AppDatabase._resolvePath() calls getDatabasesPath() from sqflite.
-  // With databaseFactoryFfi active that returns a platform-neutral path, but
-  // for unit tests we want a guaranteed in-memory database.  We achieve this
-  // by patching the factory before opening — databaseFactoryFfi treats
-  // inMemoryDatabasePath specially and never writes to disk.
-  //
-  // Because AppDatabase is a singleton we close and reinitialize it between
-  // tests by calling close() in tearDown.
   await AppDatabase.instance.initialize();
   return AppDatabase.instance;
 }
@@ -44,7 +45,15 @@ Future<AppDatabase> _openTestDatabase() async {
 void main() {
   setUpAll(_initFfiForTests);
 
-  // Ensure each test starts with a fresh in-memory database by closing after.
+  // Delete the DB file and close the singleton before each test so every
+  // test begins with a guaranteed fresh schema.
+  setUp(() async {
+    if (AppDatabase.instance.isOpen) {
+      await AppDatabase.instance.close();
+    }
+    await _deleteTestDb();
+  });
+
   tearDown(() async {
     if (AppDatabase.instance.isOpen) {
       await AppDatabase.instance.close();
@@ -98,9 +107,9 @@ void main() {
       () async {
     await _openTestDatabase();
     final rows = await AppDatabase.instance.database.query(
-      'db_metadata',
+      kMetadataTable,
       where: 'key = ?',
-      whereArgs: ['schema_version'],
+      whereArgs: [kMetaKeySchemaVersion],
     );
 
     // The seed insert in _createMetadataTable must have produced exactly one row.

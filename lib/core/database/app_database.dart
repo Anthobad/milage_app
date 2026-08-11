@@ -12,8 +12,8 @@ import 'database_config.dart';
 /// Responsibilities:
 /// - Resolve the on-device database path in a platform-safe way.
 /// - Open / create the database exactly once.
-/// - Run [onCreate] to establish the schema at version [kDatabaseVersion].
-/// - Dispatch incremental [onUpgrade] migrations so user data is never lost.
+/// - Run [_onCreate] to establish the full schema for fresh installs.
+/// - Dispatch incremental [_onUpgrade] migrations so user data is never lost.
 /// - Expose the live [Database] connection to repositories.
 /// - Close the connection cleanly.
 ///
@@ -30,7 +30,9 @@ import 'database_config.dart';
 /// When a new table or schema change is needed:
 /// 1. Bump [kDatabaseVersion] in [database_config.dart].
 /// 2. Add a `case N:` block in [_migrate] that runs the ALTER / CREATE SQL.
-/// 3. Add a comment entry in the version history in [database_config.dart].
+/// 3. Also add the same CREATE TABLE call to [_onCreate] so fresh installs
+///    get the full schema in one shot.
+/// 4. Document the version in the history comment in [database_config.dart].
 ///
 /// Do NOT recreate the database to apply changes — always migrate.
 class AppDatabase {
@@ -49,7 +51,6 @@ class AppDatabase {
   /// The live database connection.
   ///
   /// Throws [StateError] if [initialize] has not been called yet.
-  /// Repositories must call this only after the app has completed startup.
   Database get database {
     final db = _db;
     if (db == null) {
@@ -68,9 +69,6 @@ class AppDatabase {
   ///
   /// Safe to call multiple times — subsequent calls are no-ops if the
   /// database is already open.
-  ///
-  /// Throws if the database cannot be opened (e.g. disk full, permissions).
-  /// The caller ([main.dart]) is responsible for handling this gracefully.
   Future<void> initialize() async {
     if (_db?.isOpen == true) return;
 
@@ -86,9 +84,6 @@ class AppDatabase {
   }
 
   /// Close the database connection.
-  ///
-  /// After calling this, [database] will throw until [initialize] is called
-  /// again.  Repositories must stop using the connection before this returns.
   Future<void> close() async {
     await _db?.close();
     _db = null;
@@ -96,34 +91,23 @@ class AppDatabase {
 
   // ── Path resolution ────────────────────────────────────────────────────────
 
-  /// Resolves the full, platform-safe file path for the database.
-  ///
-  /// Uses [getDatabasesPath] from sqflite — on Android this returns the
-  /// app's databases directory; on iOS/macOS it returns the Library directory;
-  /// on desktop (via sqflite_common_ffi) it uses the process working directory
-  /// or a test-supplied in-memory path.
-  ///
-  /// Never hard-codes a platform-specific path.
   Future<String> _resolvePath() async {
     final baseDir = await getDatabasesPath();
     return p.join(baseDir, kDatabaseName);
   }
 
-  // ── onCreate — called once when the database file is first created ─────────
+  // ── onCreate — full schema for a brand-new install ─────────────────────────
 
   Future<void> _onCreate(Database db, int version) async {
-    // Phase 5.1: create only the foundation metadata table.
-    // Application tables (vehicles, trips, track_points, etc.) are created
-    // in their respective migration steps as later phases are implemented.
+    // Always create every table that exists at the current [kDatabaseVersion].
+    // This is a fresh install — no migration steps needed.
     await _createMetadataTable(db);
+    await _createVehiclesTable(db);
   }
 
-  // ── onUpgrade — called when kDatabaseVersion is bumped ────────────────────
+  // ── onUpgrade — incremental migration for existing users ──────────────────
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Run every migration step between oldVersion and newVersion in order.
-    // This handles jumping multiple versions (e.g. fresh install of a later
-    // app version that skips intermediate releases).
     for (var v = oldVersion + 1; v <= newVersion; v++) {
       await _migrate(db, v);
     }
@@ -131,69 +115,85 @@ class AppDatabase {
 
   // ── Migration dispatch ─────────────────────────────────────────────────────
 
-  /// Applies the schema changes required to reach [targetVersion].
-  ///
-  /// Add a new `case` for each version bump.  Each case must be additive —
-  /// use ALTER TABLE, CREATE TABLE, or CREATE INDEX.  Never DROP TABLE or
-  /// recreate existing tables in a migration.
-  ///
-  /// Version 1 changes are applied in [_onCreate], not here, because they
-  /// represent the initial schema for a fresh install.
   Future<void> _migrate(Database db, int targetVersion) async {
     switch (targetVersion) {
-      // Version 1 schema is created by _onCreate — nothing to do here.
+      // Version 1 schema is created by _onCreate on a fresh install.
+      // For users upgrading from an older build that somehow had v1,
+      // there is nothing to do here (metadata table already exists).
       case 1:
         break;
 
-      // ── Future migrations ──────────────────────────────────────────────
-      // case 2:
-      //   await db.execute('''
-      //     CREATE TABLE vehicles (
-      //       id TEXT PRIMARY KEY,
-      //       ...
-      //     )
-      //   ''');
-      //   break;
-      //
+      // ── Version 2 — Phase 5.2: vehicles table ────────────────────────────
+      case 2:
+        await _createVehiclesTable(db);
+        break;
+
+      // ── Version 3 — Phase 5.3: trips table  (not yet) ───────────────────
       // case 3:
       //   await db.execute('''
-      //     CREATE TABLE trips ( ... )
+      //     CREATE TABLE trips (
+      //       id          TEXT PRIMARY KEY,
+      //       vehicle_id  TEXT NOT NULL,
+      //       mode        TEXT NOT NULL,
+      //       start_time  TEXT NOT NULL,
+      //       end_time    TEXT,
+      //       distance_km REAL NOT NULL DEFAULT 0,
+      //       created_at  TEXT NOT NULL
+      //     )
       //   ''');
       //   break;
 
       default:
-        // Unknown target version — log and skip rather than crashing.
         // ignore: avoid_print
         print('[AppDatabase] Unknown migration target version: $targetVersion');
     }
   }
 
-  // ── Schema helpers — used by _onCreate ────────────────────────────────────
+  // ── Schema helpers ─────────────────────────────────────────────────────────
 
-  /// Creates a lightweight metadata table.
+  /// Creates the [kMetadataTable] key-value table.
   ///
-  /// Purpose:
-  /// - Provides a concrete table for the test suite to query.
-  /// - Can store arbitrary key-value pairs (e.g. migration timestamps,
-  ///   schema checksums) without polluting application tables.
-  /// - Has zero impact on existing features.
-  ///
-  /// This table is intentionally minimal and does not represent application
-  /// domain data (vehicles, trips, etc.).
+  /// Also seeds [kMetaKeySchemaVersion] with the current version so it can
+  /// be verified independently of sqflite's internal version mechanism.
   Future<void> _createMetadataTable(Database db) async {
     await db.execute('''
-      CREATE TABLE IF NOT EXISTS db_metadata (
+      CREATE TABLE IF NOT EXISTS $kMetadataTable (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
     ''');
 
-    // Seed the schema version so it can be verified independently of
-    // sqflite's internal version mechanism.
     await db.insert(
-      'db_metadata',
-      {'key': 'schema_version', 'value': '$kDatabaseVersion'},
+      kMetadataTable,
+      {
+        'key': kMetaKeySchemaVersion,
+        'value': '$kDatabaseVersion',
+      },
       conflictAlgorithm: ConflictAlgorithm.ignore,
     );
+  }
+
+  /// Creates the [kVehiclesTable] table.
+  ///
+  /// Columns match [Vehicle.toMap] / [Vehicle.fromMap]:
+  /// - id         — UUID primary key
+  /// - brand      — manufacturer name (NOT NULL)
+  /// - model      — model name (NOT NULL)
+  /// - year       — integer year (NOT NULL)
+  /// - type       — VehicleType.value string (NOT NULL)
+  /// - created_at — ISO-8601 timestamp (NOT NULL)
+  /// - updated_at — ISO-8601 timestamp, updated on every edit (NOT NULL)
+  Future<void> _createVehiclesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $kVehiclesTable (
+        id          TEXT    PRIMARY KEY,
+        brand       TEXT    NOT NULL,
+        model       TEXT    NOT NULL,
+        year        INTEGER NOT NULL,
+        type        TEXT    NOT NULL,
+        created_at  TEXT    NOT NULL,
+        updated_at  TEXT    NOT NULL
+      )
+    ''');
   }
 }

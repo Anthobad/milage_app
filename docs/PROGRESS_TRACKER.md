@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11 — Phase 5.1 complete_
+_Last updated: 2026-08-11 — Phase 5.2 complete_
 
 ---
 
@@ -598,6 +598,109 @@ Riverpod:
 - [x] Riverpod provider exposes the database to the dependency graph
 - [x] Existing Map / Drive / GPS features unchanged and working
 - [x] No vehicle / trip / GPS tables created prematurely
+
+### Phase 5.2 — Vehicle Persistence
+
+**Status: ✅ Done**
+**Completed: 2026-08-11**
+
+#### What was done
+
+- **`lib/core/database/database_config.dart`** — `kDatabaseVersion` bumped to 2. Added table/key constants: `kVehiclesTable`, `kMetadataTable`, `kMetaKeySchemaVersion`, `kMetaKeySelectedVehicleId`. Version history comment updated.
+- **`lib/core/database/app_database.dart`** — `_createVehiclesTable` helper added (columns: `id TEXT PK`, `brand TEXT`, `model TEXT`, `year INTEGER`, `type TEXT`, `created_at TEXT`, `updated_at TEXT`). `_onCreate` now calls both `_createMetadataTable` and `_createVehiclesTable` for fresh installs at v2. `case 2` added to `_migrate` dispatch to create the vehicles table for users upgrading from v1.
+- **`lib/features/cars/data/vehicle_repository.dart`** _(new)_ — `VehicleRepository` accepts a raw `Database` connection (not `AppDatabase`) for testability. Operations: `getAll` (ordered by `created_at` ASC), `getById`, `create`, `update` (refreshes `updated_at`), `delete` (auto-clears selected vehicle if the deleted vehicle was selected), `getSelectedVehicleId`, `setSelectedVehicleId`, `clearSelectedVehicle`. Selected vehicle ID stored in `db_metadata` under `kMetaKeySelectedVehicleId` — single authoritative source, no per-row flag. Snake_case ↔ Dart conversion handled entirely inside `_rowToVehicle` / `_vehicleToRow` — `Vehicle.fromMap` unchanged.
+- **`lib/features/cars/providers/vehicle_repository_provider.dart`** _(new)_ — `Provider<VehicleRepository>` that supplies `VehicleRepository(appDb.database)` to the Riverpod graph.
+- **`lib/features/cars/providers/vehicle_provider.dart`** — `VehicleListNotifier` refactored from `Notifier` to `AsyncNotifier<VehicleState>`. `build()` loads vehicles and selected ID from SQLite on first access. All mutations (`addVehicle`, `updateVehicle`, `deleteVehicle`, `selectVehicle`) write through `VehicleRepository` then update Riverpod state immediately — no full reload required. `vehicleProvider` changed to `AsyncNotifierProvider`. `selectedVehicleProvider` reads `asyncState.value` (Riverpod 3.x — `valueOrNull` was renamed to `value` on `AsyncValue`).
+- **`lib/features/cars/presentation/widgets/car_selector_sheet.dart`** — Updated to read `asyncState.value` for vehicles/selectedId. Shows a brief `CircularProgressIndicator` while the DB loads on first launch (typically imperceptible). `selectVehicle` is now `await`ed before closing.
+- **`lib/features/cars/presentation/dialogs/add_vehicle_dialog.dart`** — `_save()` is now `async`, `await`s `addVehicle()`, guards against double-tap with `_saving` flag.
+- **`lib/features/cars/presentation/dialogs/edit_vehicle_dialog.dart`** — `_save()` is now `async`, `await`s `updateVehicle()`, guards against double-tap.
+- **`lib/features/cars/presentation/dialogs/delete_vehicle_dialog.dart`** — Converted from `ConsumerWidget` to `ConsumerStatefulWidget`. `_delete()` is now `async`, `await`s `deleteVehicle()`, shows a spinner in the Delete button during the DB operation.
+- **`test/core/database/app_database_test.dart`** — Added `setUp` that deletes the DB file before each test so version-number changes don't cause `conflictAlgorithm: ignore` to preserve a stale `schema_version` row. Now uses `kMetadataTable`/`kMetaKeySchemaVersion` constants.
+- **`test/features/cars/vehicle_repository_test.dart`** _(new)_ — 11 tests, all using fresh per-test in-memory databases (no singleton bleed). Test 10 uses a named file path (`getDatabasesPath()` + `persist_test.db`) with cleanup.
+
+#### Architecture
+
+```
+Vehicle UI (CarSelectorSheet, dialogs)
+    ↓  ref.watch / ref.read
+VehicleListNotifier (AsyncNotifier<VehicleState>)
+    ↓  vehicleRepositoryProvider
+VehicleRepository(Database)
+    ↓  sqflite
+SQLite — vehicles table + db_metadata (selected_vehicle_id)
+```
+
+#### Database migration
+- v1 → v2: `CREATE TABLE IF NOT EXISTS vehicles (...)` added in `_migrate case 2`
+- Fresh install at v2: both tables created in `_onCreate`
+
+#### Vehicle table schema
+```sql
+CREATE TABLE vehicles (
+  id          TEXT    PRIMARY KEY,
+  brand       TEXT    NOT NULL,
+  model       TEXT    NOT NULL,
+  year        INTEGER NOT NULL,
+  type        TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL
+)
+```
+
+#### Selected vehicle persistence
+Stored as a key-value row in `db_metadata`:
+- Key: `selected_vehicle_id`
+- Value: vehicle UUID string
+- Absent when no vehicle is selected
+- `VehicleRepository.delete()` auto-clears this key when the deleted vehicle was selected
+
+#### Files created
+- `lib/features/cars/data/vehicle_repository.dart`
+- `lib/features/cars/providers/vehicle_repository_provider.dart`
+- `test/features/cars/vehicle_repository_test.dart`
+
+#### Files modified
+- `lib/core/database/database_config.dart`
+- `lib/core/database/app_database.dart`
+- `lib/features/cars/providers/vehicle_provider.dart`
+- `lib/features/cars/presentation/widgets/car_selector_sheet.dart`
+- `lib/features/cars/presentation/dialogs/add_vehicle_dialog.dart`
+- `lib/features/cars/presentation/dialogs/edit_vehicle_dialog.dart`
+- `lib/features/cars/presentation/dialogs/delete_vehicle_dialog.dart`
+- `test/core/database/app_database_test.dart`
+
+#### Not implemented (per spec)
+- Trip / GPS / analytics tables
+- Database-backed providers for any other feature
+- New vehicle UI design
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All 18 tests → **passed**
+  - 6 Phase 5.1 database foundation tests
+  - 11 Phase 5.2 vehicle repository tests:
+    1. Create vehicle inserts a row
+    2. getById returns the correct vehicle
+    3. getAll returns all vehicles ordered by created_at
+    4. update modifies an existing vehicle row
+    5. delete removes the vehicle row
+    6. setSelectedVehicleId persists and getSelectedVehicleId retrieves
+    7. clearSelectedVehicle removes the selection
+    8. Deleting the selected vehicle automatically clears the selection
+    9. Multiple vehicles coexist without collisions
+    10. Vehicles survive database close and reopen
+    11. Migration from version 1 to version 2 creates vehicles table
+  - 1 app shell smoke test
+- [x] Vehicles persisted to SQLite — survive app restarts
+- [x] Selected vehicle persisted in db_metadata — survives app restarts
+- [x] Create / Edit / Delete flows write through repository
+- [x] Riverpod state updated immediately (no restart required to see changes)
+- [x] Delete selected vehicle clears selection — no dangling reference
+- [x] Empty state shown when no vehicles in DB
+- [x] Auto-select first vehicle on first add
+- [x] v1 → v2 migration path verified in tests
+- [x] Existing Map / Drive / GPS / Reckless Mode / Destination Mode features unchanged
 
 ---
 

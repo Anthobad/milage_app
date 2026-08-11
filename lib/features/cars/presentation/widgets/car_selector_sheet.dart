@@ -26,9 +26,11 @@ class CarSelectorSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final vehicleState = ref.watch(vehicleProvider);
-    final vehicles = vehicleState.vehicles;
-    final selectedId = vehicleState.selectedVehicleId;
+    // vehicleProvider is now AsyncNotifierProvider — unwrap safely.
+    final asyncState = ref.watch(vehicleProvider);
+    final vehicleState = asyncState.value;
+    final vehicles = vehicleState?.vehicles ?? [];
+    final selectedId = vehicleState?.selectedVehicleId;
 
     final brightness = Theme.of(context).brightness;
     final Color sheetColor = brightness == Brightness.dark
@@ -60,16 +62,33 @@ class CarSelectorSheet extends ConsumerWidget {
           _DragHandle(color: dividerColor),
           _SheetHeader(secondaryTextColor: secondaryTextColor),
           Divider(color: dividerColor, height: 1, thickness: 1),
-          vehicles.isEmpty
-              ? _EmptyState(secondaryTextColor: secondaryTextColor)
-              : _VehicleList(
-                  vehicles: vehicles,
-                  selectedId: selectedId,
-                  onSelect: (id) {
-                    ref.read(vehicleProvider.notifier).selectVehicle(id);
-                    onClose();
-                  },
+
+          // Show a brief loading indicator while the DB initialises.
+          if (asyncState.isLoading)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
+              child: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: secondaryTextColor,
+                  ),
                 ),
+              ),
+            )
+          else if (vehicles.isEmpty)
+            _EmptyState(secondaryTextColor: secondaryTextColor)
+          else
+            _VehicleList(
+              vehicles: vehicles,
+              selectedId: selectedId,
+              onSelect: (id) async {
+                await ref.read(vehicleProvider.notifier).selectVehicle(id);
+                onClose();
+              },
+            ),
         ],
       ),
     );
@@ -156,7 +175,7 @@ class _VehicleList extends StatelessWidget {
 
   final List vehicles;
   final String? selectedId;
-  final ValueChanged<String> onSelect;
+  final Future<void> Function(String) onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +214,11 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.directions_car_outlined, size: 48, color: secondaryTextColor),
+          Icon(
+            Icons.directions_car_outlined,
+            size: 48,
+            color: secondaryTextColor,
+          ),
           const SizedBox(height: AppSpacing.md),
           Text(
             'No vehicles yet',

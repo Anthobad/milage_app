@@ -32,6 +32,7 @@ class _EditVehicleDialogState extends ConsumerState<EditVehicleDialog> {
   late final TextEditingController _modelCtrl;
   late final TextEditingController _yearCtrl;
   late VehicleType _selectedType;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -50,8 +51,11 @@ class _EditVehicleDialogState extends ConsumerState<EditVehicleDialog> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_saving) return;
+
+    setState(() => _saving = true);
 
     final updated = widget.vehicle.copyWith(
       brand: _brandCtrl.text.trim(),
@@ -60,8 +64,9 @@ class _EditVehicleDialogState extends ConsumerState<EditVehicleDialog> {
       type: _selectedType,
     );
 
-    ref.read(vehicleProvider.notifier).updateVehicle(updated);
-    Navigator.of(context).pop();
+    await ref.read(vehicleProvider.notifier).updateVehicle(updated);
+
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -74,7 +79,7 @@ class _EditVehicleDialogState extends ConsumerState<EditVehicleDialog> {
       yearCtrl: _yearCtrl,
       selectedType: _selectedType,
       onTypeChanged: (t) => setState(() => _selectedType = t),
-      onSave: _save,
+      onSave: _saving ? () {} : _save,
     );
   }
 }

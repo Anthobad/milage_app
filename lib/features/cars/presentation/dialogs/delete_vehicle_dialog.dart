@@ -17,14 +17,34 @@ void showDeleteVehicleDialog(BuildContext context, Vehicle vehicle) {
 /// Centered confirmation dialog before deleting a vehicle.
 ///
 /// On confirm: removes the vehicle through [vehicleProvider].
-/// Selection rules are handled entirely by the provider.
-class DeleteVehicleDialog extends ConsumerWidget {
+/// If the deleted vehicle was selected, the provider clears/updates the
+/// selection automatically.
+class DeleteVehicleDialog extends ConsumerStatefulWidget {
   const DeleteVehicleDialog({super.key, required this.vehicle});
 
   final Vehicle vehicle;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DeleteVehicleDialog> createState() =>
+      _DeleteVehicleDialogState();
+}
+
+class _DeleteVehicleDialogState extends ConsumerState<DeleteVehicleDialog> {
+  bool _deleting = false;
+
+  Future<void> _delete() async {
+    if (_deleting) return;
+    setState(() => _deleting = true);
+
+    await ref
+        .read(vehicleProvider.notifier)
+        .deleteVehicle(widget.vehicle.id);
+
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return AlertDialog(
@@ -34,19 +54,16 @@ class DeleteVehicleDialog extends ConsumerWidget {
       title: const Text('Delete Vehicle?'),
       content: Text(
         'Are you sure you want to delete '
-        '${vehicle.brand} ${vehicle.model}?',
+        '${widget.vehicle.brand} ${widget.vehicle.model}?',
         style: theme.textTheme.bodyMedium,
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _deleting ? null : () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () {
-            ref.read(vehicleProvider.notifier).deleteVehicle(vehicle.id);
-            Navigator.of(context).pop();
-          },
+          onPressed: _deleting ? null : _delete,
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.error,
             minimumSize: Size.zero,
@@ -55,7 +72,16 @@ class DeleteVehicleDialog extends ConsumerWidget {
               vertical: AppSpacing.sm + AppSpacing.xs,
             ),
           ),
-          child: const Text('Delete'),
+          child: _deleting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Delete'),
         ),
       ],
     );

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/vehicle.dart';
+import 'vehicle_repository_provider.dart';
 
 // ---------------------------------------------------------------------------
 // State
@@ -9,7 +10,7 @@ import '../models/vehicle.dart';
 /// Immutable state for the vehicle list feature.
 ///
 /// Holds both the full list of vehicles and the ID of the currently
-/// selected vehicle. Keeping them together avoids sync issues between
+/// selected vehicle.  Keeping them together avoids sync issues between
 /// separate providers.
 ///
 /// [selectedVehicleId] is `null` when no vehicle is selected.
@@ -24,7 +25,6 @@ class VehicleState {
 
   VehicleState copyWith({
     List<Vehicle>? vehicles,
-    // Use a sentinel to allow explicitly setting selectedVehicleId to null.
     Object? selectedVehicleId = _keep,
   }) {
     return VehicleState(
@@ -47,89 +47,147 @@ class VehicleState {
   int get hashCode => Object.hash(vehicles, selectedVehicleId);
 }
 
-// Sentinel value used by copyWith to distinguish "not provided" from null.
+// Sentinel used by copyWith to distinguish "not provided" from explicit null.
 const Object _keep = Object();
 
 // ---------------------------------------------------------------------------
 // Notifier
 // ---------------------------------------------------------------------------
 
-/// Manages the list of vehicles and the selected vehicle.
+/// Manages the vehicle list and selected vehicle, backed by [VehicleRepository].
 ///
-/// Currently uses in-memory state.
-/// Ready for database integration in a future phase — replace the
-/// in-memory mutations with repository calls inside each method.
-class VehicleListNotifier extends Notifier<VehicleState> {
+/// On first build, loads all vehicles and the persisted selected vehicle ID
+/// from SQLite.  All mutations write through the repository so changes survive
+/// app restarts.
+///
+/// ## Data flow
+///
+/// Load:    build() → repository.getAll() + repository.getSelectedVehicleId()
+/// Create:  addVehicle()  → repository.create()  → refresh state
+/// Edit:    updateVehicle() → repository.update() → refresh state
+/// Delete:  deleteVehicle() → repository.delete() → refresh state
+/// Select:  selectVehicle() → repository.setSelectedVehicleId() → update state
+class VehicleListNotifier extends AsyncNotifier<VehicleState> {
   @override
-  VehicleState build() => const VehicleState();
+  Future<VehicleState> build() async {
+    final repo = ref.read(vehicleRepositoryProvider);
+    final vehicles = await repo.getAll();
+    final selectedId = await repo.getSelectedVehicleId();
 
-  // --- CRUD ------------------------------------------------------------------
-
-  /// Add a new [vehicle] to the list.
-  ///
-  /// If the list was empty before adding, the new vehicle is automatically
-  /// selected.
-  void addVehicle(Vehicle vehicle) {
-    final updated = [...state.vehicles, vehicle];
-    state = state.copyWith(
-      vehicles: updated,
-      // Auto-select first vehicle added.
-      selectedVehicleId:
-          state.vehicles.isEmpty ? vehicle.id : state.selectedVehicleId,
-    );
-  }
-
-  /// Replace the vehicle that has the same [Vehicle.id] as [updated].
-  ///
-  /// Does nothing if no matching vehicle is found.
-  void updateVehicle(Vehicle updated) {
-    final index = state.vehicles.indexWhere((v) => v.id == updated.id);
-    if (index == -1) return;
-
-    final list = [...state.vehicles];
-    list[index] = updated;
-    state = state.copyWith(vehicles: list);
-  }
-
-  /// Remove the vehicle with [id] from the list.
-  ///
-  /// Selection rules after deletion:
-  /// - If the deleted vehicle was not selected, selection is unchanged.
-  /// - If it was selected and other vehicles remain, the next one
-  ///   (or the previous if it was the last) becomes selected.
-  /// - If no vehicles remain, selection is cleared to null.
-  void deleteVehicle(String id) {
-    final oldList = state.vehicles;
-    final list = oldList.where((v) => v.id != id).toList();
-
-    String? nextSelectedId;
-    if (state.selectedVehicleId == id) {
-      // The deleted vehicle was selected — pick the next one.
-      if (list.isNotEmpty) {
-        final deletedIndex = oldList.indexWhere((v) => v.id == id);
-        // Use same index (now pointing to next item), or last item if at end.
-        final nextIndex = deletedIndex.clamp(0, list.length - 1);
-        nextSelectedId = list[nextIndex].id;
-      } else {
-        nextSelectedId = null;
-      }
-    } else {
-      nextSelectedId = state.selectedVehicleId;
+    // If the persisted selected ID no longer points to a real vehicle
+    // (e.g. database was cleared externally) clear it silently.
+    final validSelectedId =
+        vehicles.any((v) => v.id == selectedId) ? selectedId : null;
+    if (validSelectedId == null && selectedId != null) {
+      await repo.clearSelectedVehicle();
     }
 
-    state = state.copyWith(
-      vehicles: list,
-      selectedVehicleId: nextSelectedId,
+    return VehicleState(
+      vehicles: vehicles,
+      selectedVehicleId: validSelectedId,
     );
   }
 
-  // --- Selection -------------------------------------------------------------
+  // ── Helpers ──────────────────────────────────────────────────────────────
 
-  /// Set the vehicle with [id] as the selected vehicle.
+  /// Returns the current [VehicleState] or an empty state while loading.
+  VehicleState get _current => state.value ?? const VehicleState();
+
+  // ── CRUD ─────────────────────────────────────────────────────────────────
+
+  /// Persists [vehicle] and refreshes state.
   ///
-  /// Passing `null` clears the selection.
-  void selectVehicle(String? id) {
-    state = state.copyWith(selectedVehicleId: id);
+  /// Per the existing product spec, the first vehicle added is automatically
+  /// selected.
+  Future<void> addVehicle(Vehicle vehicle) async {
+    final repo = ref.read(vehicleRepositoryProvider);
+    await repo.create(vehicle);
+
+    final current = _current;
+    final wasEmpty = current.vehicles.isEmpty;
+    final updated = [...current.vehicles, vehicle];
+
+    // Auto-select the very first vehicle.
+    String? newSelectedId = current.selectedVehicleId;
+    if (wasEmpty) {
+      newSelectedId = vehicle.id;
+      await repo.setSelectedVehicleId(vehicle.id);
+    }
+
+    state = AsyncData(
+      current.copyWith(vehicles: updated, selectedVehicleId: newSelectedId),
+    );
+  }
+
+  /// Updates the existing vehicle record matching [updated.id].
+  ///
+  /// Does nothing if no matching vehicle is found.
+  Future<void> updateVehicle(Vehicle updated) async {
+    final current = _current;
+    final index = current.vehicles.indexWhere((v) => v.id == updated.id);
+    if (index == -1) return;
+
+    final repo = ref.read(vehicleRepositoryProvider);
+    await repo.update(updated);
+
+    final list = [...current.vehicles];
+    list[index] = updated;
+    state = AsyncData(current.copyWith(vehicles: list));
+  }
+
+  /// Deletes the vehicle with [id] and clears selection if needed.
+  ///
+  /// Selection rules:
+  /// - If the deleted vehicle was not selected, selection is unchanged.
+  /// - If it was selected and other vehicles remain, the adjacent vehicle
+  ///   (next, or last if at end) becomes selected and is persisted.
+  /// - If no vehicles remain after deletion, selection is cleared.
+  Future<void> deleteVehicle(String id) async {
+    final repo = ref.read(vehicleRepositoryProvider);
+    // Repository handles clearing the selected ID when the deleted vehicle
+    // was selected — but we also apply the "select next" logic here.
+    final current = _current;
+    final oldList = current.vehicles;
+    final newList = oldList.where((v) => v.id != id).toList();
+
+    String? nextSelectedId;
+    if (current.selectedVehicleId == id) {
+      if (newList.isNotEmpty) {
+        final deletedIndex = oldList.indexWhere((v) => v.id == id);
+        final nextIndex = deletedIndex.clamp(0, newList.length - 1);
+        nextSelectedId = newList[nextIndex].id;
+        await repo.setSelectedVehicleId(nextSelectedId);
+      } else {
+        nextSelectedId = null;
+        // repo.delete() will clear the selected ID automatically.
+      }
+    } else {
+      nextSelectedId = current.selectedVehicleId;
+    }
+
+    await repo.delete(id);
+
+    state = AsyncData(
+      current.copyWith(
+        vehicles: newList,
+        selectedVehicleId: nextSelectedId,
+      ),
+    );
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+
+  /// Selects the vehicle with [id] and persists the choice.
+  ///
+  /// Pass `null` to clear the selection.
+  Future<void> selectVehicle(String? id) async {
+    final repo = ref.read(vehicleRepositoryProvider);
+    if (id == null) {
+      await repo.clearSelectedVehicle();
+    } else {
+      await repo.setSelectedVehicleId(id);
+    }
+    state = AsyncData(_current.copyWith(selectedVehicleId: id));
   }
 }
 
@@ -139,22 +197,31 @@ class VehicleListNotifier extends Notifier<VehicleState> {
 
 /// Primary vehicle provider.
 ///
-/// Exposes the full [VehicleState] (list + selected ID).
-/// Use [selectedVehicleProvider] for convenient access to the selected vehicle.
-final NotifierProvider<VehicleListNotifier, VehicleState> vehicleProvider =
-    NotifierProvider<VehicleListNotifier, VehicleState>(
+/// Exposes [AsyncValue<VehicleState>].  On first access it loads vehicles and
+/// the selected vehicle ID from SQLite.  All subsequent mutations are
+/// reflected immediately without a full reload.
+///
+/// Typical UI usage:
+/// ```dart
+/// final asyncState = ref.watch(vehicleProvider);
+/// final vehicles = asyncState.valueOrNull?.vehicles ?? [];
+/// ```
+final AsyncNotifierProvider<VehicleListNotifier, VehicleState> vehicleProvider =
+    AsyncNotifierProvider<VehicleListNotifier, VehicleState>(
   VehicleListNotifier.new,
 );
 
-/// Derived provider that returns the currently selected [Vehicle], or `null`
-/// if no vehicle is selected or the ID no longer exists in the list.
+/// Derived convenience provider — returns the currently selected [Vehicle],
+/// or `null` when none is selected or the state is still loading.
 final Provider<Vehicle?> selectedVehicleProvider = Provider<Vehicle?>(
   (ref) {
-    final state = ref.watch(vehicleProvider);
-    if (state.selectedVehicleId == null) return null;
-    return state.vehicles.firstWhere(
-      (v) => v.id == state.selectedVehicleId,
-      orElse: () => state.vehicles.first,
+    final asyncState = ref.watch(vehicleProvider);
+    final vehicleState = asyncState.value;
+    if (vehicleState == null) return null;
+    if (vehicleState.selectedVehicleId == null) return null;
+    return vehicleState.vehicles.firstWhere(
+      (v) => v.id == vehicleState.selectedVehicleId,
+      orElse: () => vehicleState.vehicles.first,
     );
   },
 );

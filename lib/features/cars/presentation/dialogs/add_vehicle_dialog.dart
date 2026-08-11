@@ -16,8 +16,8 @@ void showAddVehicleDialog(BuildContext context) {
 
 /// Centered modal dialog for creating a new vehicle.
 ///
-/// On save: generates a UUID, creates a [Vehicle], adds it through
-/// [vehicleProvider], and automatically selects it.
+/// On save: generates a UUID, creates a [Vehicle], persists it through
+/// [vehicleProvider], and automatically selects it if it is the first vehicle.
 class AddVehicleDialog extends ConsumerStatefulWidget {
   const AddVehicleDialog({super.key});
 
@@ -31,6 +31,7 @@ class _AddVehicleDialogState extends ConsumerState<AddVehicleDialog> {
   final _modelCtrl = TextEditingController();
   final _yearCtrl = TextEditingController();
   VehicleType _selectedType = VehicleType.sedan;
+  bool _saving = false;
 
   @override
   void dispose() {
@@ -40,8 +41,11 @@ class _AddVehicleDialogState extends ConsumerState<AddVehicleDialog> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_saving) return;
+
+    setState(() => _saving = true);
 
     final vehicle = Vehicle(
       id: const Uuid().v4(),
@@ -52,8 +56,9 @@ class _AddVehicleDialogState extends ConsumerState<AddVehicleDialog> {
       createdAt: DateTime.now(),
     );
 
-    ref.read(vehicleProvider.notifier).addVehicle(vehicle);
-    Navigator.of(context).pop();
+    await ref.read(vehicleProvider.notifier).addVehicle(vehicle);
+
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -66,7 +71,7 @@ class _AddVehicleDialogState extends ConsumerState<AddVehicleDialog> {
       yearCtrl: _yearCtrl,
       selectedType: _selectedType,
       onTypeChanged: (t) => setState(() => _selectedType = t),
-      onSave: _save,
+      onSave: _saving ? () {} : _save,
     );
   }
 }
