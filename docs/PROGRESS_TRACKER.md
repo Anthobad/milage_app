@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-11 — Phase 5.5 complete_
+_Last updated: 2026-08-12 — Phase 6.1 complete_
 
 ---
 
@@ -1141,7 +1141,101 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: ⬜ Not started**
+**Status: 🔄 In progress** _(6.1 complete)_
+
+---
+
+### Phase 6.1 — Driving Analytics Foundation
+
+**Status: ✅ Done**
+**Completed: 2026-08-12**
+
+#### What was done
+
+- **`lib/features/analytics/models/driving_analytics.dart`** _(new)_ — `DrivingAnalytics` top-level result model. Holds `analyzedPoints`, `speedAnalysis`, `altitudeAnalysis`, and nullable stub fields for future phases (`turnAnalysis`, `brakingAnalysis`, `overallStatistics`). Immutable, extensible, no Flutter/Riverpod dependency. `DrivingAnalytics.empty(tripId)` factory for zero-point tracks.
+- **`lib/features/analytics/models/analyzed_track_point.dart`** _(new)_ — `AnalyzedTrackPoint`. Enriches each `TrackPointRecord` with per-segment derived values: `segmentDistanceM`, `segmentDurationS`, `derivedSpeedMs`, `derivedSpeedKmh`, `speedChangeMps`, `accelerationMps2`, `headingChangeDeg`, `altitudeChangeMetre`. Raw GPS fields preserved unchanged. All derived fields nullable for the first point and invalid intervals.
+- **`lib/features/analytics/models/speed_analysis.dart`** _(new)_ — `SpeedAnalysis` aggregates max/min/avg derived speed, max speed change, total distance, moving duration. Does NOT replace the persisted `averageSpeedKmh`/`minimumSpeedKmh`/`maximumSpeedKmh` on `Trip` — those remain authoritative.
+- **`lib/features/analytics/models/altitude_analysis.dart`** _(new)_ — `AltitudeAnalysis` aggregates min/max altitude, total elevation gain/loss, altitude range. Null when no altitude data — never substitutes 0 for null.
+- **`lib/features/analytics/services/gps_math_utils.dart`** _(new)_ — `GpsMathUtils` pure Dart static utility class. Methods: `distanceMetres` (latlong2 haversine), `timeDeltaSeconds` (returns null for zero/negative intervals), `derivedSpeedMs`, `speedMsToKmh`, `speedKmhToMs`, `accelerationMps2`, `bearingDegrees`, `headingChangeDegrees`, `altitudeChangeMetre`, `isValid`. All methods guard against NaN/Infinity/division-by-zero. No new packages — uses existing `latlong2` and `dart:math`.
+- **`lib/features/analytics/services/driving_analytics_service.dart`** _(new)_ — `DrivingAnalyticsService` plain Dart class. `analyze({tripId, points})` method: sorts by timestamp, single-pass O(n) derivation, produces `DrivingAnalytics`. No Flutter, no Riverpod, no database. Returns `DrivingAnalytics.empty` for empty input. Never throws.
+- **`lib/features/analytics/providers/trip_analytics_provider.dart`** _(new)_ — `drivingAnalyticsServiceProvider` (plain `Provider`), `TripAnalyticsState`, `TripAnalyticsNotifier` (family `Notifier` — same pattern as `TripStatsNotifier`), `tripAnalyticsProvider` (`NotifierProvider.family<TripAnalyticsNotifier, TripAnalyticsState, String>`). Loads track points from `TrackPointRepository` then runs `DrivingAnalyticsService`. Service itself has no Riverpod dependency.
+- **`test/features/analytics/driving_analytics_test.dart`** _(new)_ — 52 tests. All 28 required spec cases covered (basic input, ordering, distance, time, speed, acceleration, altitude, heading, data quality, performance) plus 24 additional `GpsMathUtils` unit tests and service integration tests. No device/GPS/DB/internet required. Performance: 10 000-point track analyzed in 78–135 ms.
+
+#### Architecture
+
+```
+Trip Stats / Future Phase 6 UI
+        ↓
+tripAnalyticsProvider (NotifierProvider.family — tripId)
+        ↓
+TripAnalyticsNotifier
+        ├── trackPointRepositoryProvider  →  TrackPointRepository  →  SQLite
+        └── drivingAnalyticsServiceProvider  →  DrivingAnalyticsService
+                ↓
+            GpsMathUtils  (pure Dart, no state)
+                ↓
+            DrivingAnalytics
+             ├── List<AnalyzedTrackPoint>
+             ├── SpeedAnalysis
+             ├── AltitudeAnalysis
+             ├── turnAnalysis        (null — Phase 6.2)
+             ├── brakingAnalysis     (null — Phase 6.3)
+             └── overallStatistics   (null — Phase 6.4)
+```
+
+#### Files created
+- `lib/features/analytics/models/driving_analytics.dart`
+- `lib/features/analytics/models/analyzed_track_point.dart`
+- `lib/features/analytics/models/speed_analysis.dart`
+- `lib/features/analytics/models/altitude_analysis.dart`
+- `lib/features/analytics/services/gps_math_utils.dart`
+- `lib/features/analytics/services/driving_analytics_service.dart`
+- `lib/features/analytics/providers/trip_analytics_provider.dart`
+- `test/features/analytics/driving_analytics_test.dart`
+
+#### Files modified
+None — no existing files were changed.
+
+#### Dependencies added
+None — uses existing `latlong2` and `dart:math`.
+
+#### Not implemented (per spec — future phases)
+- Left/right turn detection (Phase 6.2)
+- Hard braking / sudden-stop detection (Phase 6.3)
+- Overall driving statistics / score (Phase 6.4)
+- Analytics UI integration (Phase 6.5)
+- Analytics persistence / caching
+- Database schema changes
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **204 tests passed**:
+  - 152 pre-existing tests (Phases 5.1–5.5 + smoke test) ✅
+  - 52 new Phase 6.1 analytics tests ✅
+    - Tests 1–4: Basic input (empty, 1 point, 2 points, multiple)
+    - Tests 5–7: Ordering (out-of-order, duplicates, negative intervals)
+    - Tests 8–10: Distance (known coords, identical, sub-metre)
+    - Tests 11–13: Time delta (normal, zero, negative)
+    - Tests 14–17: Speed (valid, missing, zero, speed changes)
+    - Tests 18–20: Acceleration (positive, negative, zero-duration)
+    - Tests 21–23: Altitude (valid, missing, null never → 0)
+    - Tests 24–25: Heading (valid preserved, null handled)
+    - Tests 26–27: Data quality (no crash, no NaN/Infinity)
+    - Test 28: Performance (10 000 points in 78–135 ms)
+    - 24 additional GpsMathUtils unit tests
+- [x] DrivingAnalytics model extensible for Phases 6.2–6.4
+- [x] AnalyzedTrackPoint preserves raw GPS data, adds derived values
+- [x] GpsMathUtils: haversine distance, time delta, speed, acceleration, bearing, heading change, altitude change
+- [x] DrivingAnalyticsService: single-pass O(n), sort-by-timestamp, defensive against all edge cases
+- [x] tripAnalyticsProvider: family pattern, plain service, no Riverpod in service
+- [x] No database schema modified
+- [x] No existing Trip summary statistics replaced or contradicted
+- [x] No UI changes
+- [x] No new packages added
+- [x] Turn/braking/stop algorithms NOT implemented
+
+---
 
 ---
 
