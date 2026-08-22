@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// DrivingAnalyticsService — Phase 6.1 Foundation / Phase 6.2 Turn Analysis
+// DrivingAnalyticsService — Phase 6.1 Foundation / Phase 6.2 Turn / Phase 6.3 Braking
 // ---------------------------------------------------------------------------
 //
 // The analytics engine that processes a list of persisted GPS track points
@@ -11,12 +11,12 @@
 //   2. Sort the points chronologically (authoritative order by timestamp).
 //   3. Compute per-segment derived values via [GpsMathUtils].
 //   4. Aggregate speed and altitude analyses.
-//   5. Run [TurnDetector] to produce [TurnAnalysis].   ← Phase 6.2
-//   6. Return a structured, immutable [DrivingAnalytics] result.
+//   5. Run [TurnDetector] to produce [TurnAnalysis].     ← Phase 6.2
+//   6. Run [BrakingDetector] to produce [BrakingAnalysis]. ← Phase 6.3
+//   7. Return a structured, immutable [DrivingAnalytics] result.
 //
 // ## What this service does NOT do
 //
-//   - Braking detection    (Phase 6.3)
 //   - Driving score        (Phase 6.4)
 //   - UI rendering
 //   - Database access
@@ -27,6 +27,7 @@
 //
 //   Single pass over the sorted list: O(n).
 //   Turn detection is O(n × windowSize) ≈ O(n) (windowSize is constant).
+//   Braking detection is O(n) — single forward pass.
 //   No nested full-track scans.
 //
 // ## Safety
@@ -36,9 +37,11 @@
 
 import '../models/altitude_analysis.dart';
 import '../models/analyzed_track_point.dart';
+import '../models/braking_analysis.dart';
 import '../models/driving_analytics.dart';
 import '../models/speed_analysis.dart';
 import '../models/turn_analysis.dart';
+import 'braking_detector.dart';
 import 'gps_math_utils.dart';
 import 'turn_detector.dart';
 import '../../trips/models/track_point_record.dart';
@@ -54,18 +57,21 @@ import '../../trips/models/track_point_record.dart';
 /// final analytics = service.analyze(tripId: trip.id, points: trackPoints);
 /// ```
 ///
-/// To override the turn detection configuration:
+/// To override detection configurations:
 /// ```dart
 /// final service = DrivingAnalyticsService(
 ///   turnDetector: TurnDetector(config: TurnDetectorConfig(minTurnAngleDeg: 45)),
+///   brakingDetector: BrakingDetector(config: BrakingDetectorConfig(minDecelerationMps2: 0.6)),
 /// );
 /// ```
 class DrivingAnalyticsService {
   const DrivingAnalyticsService({
     this.turnDetector = const TurnDetector(),
+    this.brakingDetector = const BrakingDetector(),
   });
 
   final TurnDetector turnDetector;
+  final BrakingDetector brakingDetector;
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -236,12 +242,16 @@ class DrivingAnalyticsService {
     // ── Step 4: turn analysis ──────────────────────────────────────────────
     final TurnAnalysis turnAnalysis = turnDetector.detectTurns(sorted);
 
+    // ── Step 5: braking analysis ───────────────────────────────────────────
+    final BrakingAnalysis brakingAnalysis = brakingDetector.detect(sorted);
+
     return DrivingAnalytics(
       tripId: tripId,
       analyzedPoints: analyzedPoints,
       speedAnalysis: speedAnalysis,
       altitudeAnalysis: altitudeAnalysis,
       turnAnalysis: turnAnalysis,
+      brakingAnalysis: brakingAnalysis,
     );
   }
 

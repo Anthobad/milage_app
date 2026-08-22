@@ -1,13 +1,13 @@
 // ---------------------------------------------------------------------------
-// DrivingAnalytics — Phase 6.1 Foundation / Phase 6.2 Turn Analysis
+// DrivingAnalytics — Phase 6.1 Foundation / Phase 6.2 Turn / Phase 6.3 Braking
 // ---------------------------------------------------------------------------
 //
 // Top-level analytics result model.
 //
 // This model is designed to grow with each Phase 6 subphase:
 //   6.1 — Foundation: speed analysis, altitude analysis, track summary
-//   6.2 — Turn analysis (TurnAnalysis) ← now populated
-//   6.3 — Braking / sudden-stop detection (BrakingAnalysis)
+//   6.2 — Turn analysis (TurnAnalysis) ← populated
+//   6.3 — Braking / sudden-stop detection (BrakingAnalysis) ← populated
 //   6.4 — Overall driving statistics (DrivingScore)
 //   6.5 — Analytics UI integration
 //
@@ -23,6 +23,7 @@
 
 import 'analyzed_track_point.dart';
 import 'altitude_analysis.dart';
+import 'braking_analysis.dart';
 import 'speed_analysis.dart';
 import 'turn_analysis.dart';
 
@@ -64,9 +65,11 @@ class DrivingAnalytics {
   /// Turn analysis — populated from Phase 6.2.
   final TurnAnalysis? turnAnalysis;
 
-  /// Braking / sudden-stop analysis — populated in Phase 6.3.  Null until
-  /// implemented.
-  final dynamic brakingAnalysis;
+  /// Braking / sudden-stop analysis — populated from Phase 6.3.
+  ///
+  /// Null before Phase 6.3 implementation; non-null (possibly empty) from
+  /// Phase 6.3 onward.
+  final BrakingAnalysis? brakingAnalysis;
 
   /// Overall driving statistics / score — populated in Phase 6.4.  Null until
   /// implemented.
@@ -91,6 +94,7 @@ class DrivingAnalytics {
       speedAnalysis: SpeedAnalysis.empty(),
       altitudeAnalysis: AltitudeAnalysis.empty(),
       turnAnalysis: TurnAnalysis.empty(),
+      brakingAnalysis: BrakingAnalysis.empty(),
     );
   }
 
@@ -102,7 +106,7 @@ class DrivingAnalytics {
     SpeedAnalysis? speedAnalysis,
     AltitudeAnalysis? altitudeAnalysis,
     TurnAnalysis? turnAnalysis,
-    dynamic brakingAnalysis,
+    BrakingAnalysis? brakingAnalysis,
     dynamic overallStatistics,
   }) {
     return DrivingAnalytics(
@@ -120,5 +124,5 @@ class DrivingAnalytics {
   String toString() =>
       'DrivingAnalytics(tripId: $tripId, points: $pointCount, '
       'speed: $speedAnalysis, altitude: $altitudeAnalysis, '
-      'turns: $turnAnalysis)';
+      'turns: $turnAnalysis, braking: $brakingAnalysis)';
 }

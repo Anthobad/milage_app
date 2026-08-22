@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 6.2 complete_
+_Last updated: 2026-08-22 — Phase 6.3 complete_
 
 ---
 
@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: 🔄 In progress** _(6.1, 6.2 complete)_
+**Status: 🔄 In progress** _(6.1, 6.2, 6.3 complete)_
 
 ---
 
@@ -1397,6 +1397,178 @@ None. Uses existing `latlong2`, `dart:math`, and `GpsMathUtils`.
 - [x] No UI changes
 - [x] No new packages
 - [x] All existing Phase 5 and Phase 6.1 tests continue passing
+
+---
+
+### Phase 6.3 — Hard Braking & Sudden Stop Detection
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+- **`lib/features/analytics/models/braking_event.dart`** _(new)_ — `BrakingEventType` enum (`hardBraking`, `suddenStop`). `BrakingEventSeverity` enum (`mild`, `hard`, `severe`). `BrakingEvent` immutable model with all required fields: `type`, `timestamp`, `latitude`, `longitude`, `startSpeedKmh`, `endSpeedKmh`, `decelerationMps2`, `durationS?`, `severity`. Convenience getters `isSuddenStop`, `isHardBraking`, `speedReductionKmh`. Full documentation on GPS limitations, deduplication strategy, and severity rationale.
+- **`lib/features/analytics/models/braking_analysis.dart`** _(new)_ — `BrakingAnalysis` aggregated result. Holds `List<BrakingEvent>`. `hardBrakingCount`, `suddenStopCount`, `severeCount` derived from the event list at construction — single authoritative source, no duplication. `totalEvents`, `isEmpty` convenience getters. `BrakingAnalysis.empty()` factory.
+- **`lib/features/analytics/services/braking_detector.dart`** _(new)_ — `BrakingDetectorConfig` centralising all thresholds as named constants (8 configurable values). `BrakingDetector` single-pass O(n) algorithm with full documentation, sliding candidate window, cooldown debounce, and GPS noise filtering.
+- **`lib/features/analytics/services/driving_analytics_service.dart`** _(modified)_ — Wires `BrakingDetector` into the analytics pipeline as step 5. `DrivingAnalyticsService` now accepts an optional `BrakingDetector` for dependency injection in tests.
+- **`lib/features/analytics/models/driving_analytics.dart`** _(modified)_ — `brakingAnalysis` field changed from `dynamic` to typed `BrakingAnalysis?`. `DrivingAnalytics.empty()` now returns `BrakingAnalysis.empty()`. `copyWith` and `toString` updated.
+- **`test/features/analytics/braking_analysis_test.dart`** _(new)_ — 59 unit tests. All tests use deterministic synthetic GPS tracks. No device, network, or database required.
+
+#### Detection algorithm
+
+```
+Sorted GPS track
+        ↓
+Single forward pass O(n)
+    ├── For each consecutive pair (prev, cur):
+    │       ├── Resolve time delta (skip if ≤ 0 or > maxTimeGapS)
+    │       ├── Resolve best speed (raw GPS speedKmh > derived haversine/time)
+    │       ├── Skip if prevSpeed < minStartSpeedKmh (stationary / low speed)
+    │       ├── Compute deceleration = (prevSpeed_ms - curSpeed_ms) / durS
+    │       ├── Open candidate window when decel ≥ minDecelerationMps2
+    │       │       (cooldown gate: no new window within cooldownDistanceM)
+    │       ├── Extend window on each subsequent qualifying segment
+    │       └── Seal and emit event when decel drops below threshold
+    ├── At end of track, seal any open candidate
+    └── Classification: endSpeedKmh ≤ suddenStopEndSpeedKmh → suddenStop
+                        otherwise → hardBraking
+```
+
+#### Event deduplication
+
+One physical braking maneuver → one event. When strong braking ends at near-zero speed, the event type is `suddenStop` — NOT both a `hardBraking` and a `suddenStop`. The `hardBrakingCount + suddenStopCount` always equals `totalEvents`.
+
+#### Configuration (all centralised in `BrakingDetectorConfig`)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `minDecelerationMps2` | 0.5 m/s² | Conservative GPS-derived threshold; GPS-based studies suggest 0.35–0.6 m/s². Chosen at middle of range — tune after physical-device testing |
+| `suddenStopEndSpeedKmh` | 5 km/h | GPS speed noise at a true stop can report 0–3 km/h; 5 km/h captures legitimate near-stops |
+| `minStartSpeedKmh` | 10 km/h | Above pedestrian/crawl speed; prevents stationary GPS jitter events |
+| `maxTimeGapS` | 10 s | Skips segments where GPS gap is too large for reliable deceleration calculation |
+| `cooldownDistanceM` | 100 m | Post-event cooldown to prevent one maneuver fragmenting into multiple events |
+| `minBrakingSegments` | 1 | Minimum consecutive qualifying segments; increase to 2 for stricter noise rejection |
+| `hardSeverityThresholdMps2` | 0.7 m/s² | mild → hard boundary |
+| `severeSeverityThresholdMps2` | 1.0 m/s² | hard → severe boundary |
+
+#### Threshold rationale — GPS vs accelerometer
+
+Published accelerometer-based harsh-braking thresholds (0.3–0.5 g ≈ 3–5 m/s², SAE/ISO) **cannot** be used for GPS-derived data. GPS speed is rate-limited (1–5 s fix interval), has inherent noise (~0.1–0.3 m/s² apparent deceleration on smooth road), and computes averaged deceleration across each interval. The 0.5 m/s² threshold is based on GPS-specific literature (Bagdadi & Várhelyi 2011; Wahlberg 2006) which suggests 0.35–0.6 m/s² for GPS-only harsh-event detection.
+
+#### Multi-point evidence
+
+The sliding candidate window requires the deceleration to be sustained across at least `minBrakingSegments` consecutive GPS pairs. A single noisy speed spike cannot emit an event (especially when `minBrakingSegments` is increased to 2 in stricter configurations). This is the primary defence against GPS noise beyond the threshold filter.
+
+#### Severity approach
+
+Three levels derived from `decelerationMps2` against configurable thresholds:
+- `mild` — above detection threshold but below `hardSeverityThresholdMps2`
+- `hard` — above hard threshold but below severe
+- `severe` — above `severeSeverityThresholdMps2`
+
+Severity is a lightweight signal — the primary output is reliable event detection.
+
+#### GPS noise handling
+
+- `minStartSpeedKmh` (10 km/h) — blocks stationary jitter and low-speed parking
+- `maxTimeGapS` (10 s) — skips unreliable large-gap segments
+- `cooldownDistanceM` (100 m) — debounces multi-GPS-fix maneuvers
+- `minBrakingSegments` — requires evidence across consecutive points
+- Raw GPS speed preferred over derived speed (less noise)
+- Speed conversion in m/s for all calculations (avoids km/h rounding artefacts)
+
+#### Architecture
+
+```
+Persisted GPS Track Points
+        ↓
+DrivingAnalyticsService.analyze()
+    ├── Sort by timestamp
+    ├── Single-pass AnalyzedTrackPoint derivation (speed, altitude, heading)
+    ├── TurnDetector.detectTurns(sortedPoints)          ← Phase 6.2
+    └── BrakingDetector.detect(sortedPoints)            ← Phase 6.3
+            ↓  single forward pass, O(n)
+        BrakingAnalysis { events, hardBrakingCount, suddenStopCount, severeCount }
+                ↓
+        DrivingAnalytics.brakingAnalysis
+                ↓
+        tripAnalyticsProvider (existing Riverpod family provider)
+```
+
+No new Riverpod providers, no new database tables, no new packages.
+
+#### Files created
+- `lib/features/analytics/models/braking_event.dart`
+- `lib/features/analytics/models/braking_analysis.dart`
+- `lib/features/analytics/services/braking_detector.dart`
+- `test/features/analytics/braking_analysis_test.dart`
+
+#### Files modified
+- `lib/features/analytics/models/driving_analytics.dart` — `brakingAnalysis` typed to `BrakingAnalysis?`, `empty()` returns `BrakingAnalysis.empty()`
+- `lib/features/analytics/services/driving_analytics_service.dart` — wires `BrakingDetector`, injects result into `DrivingAnalytics`
+
+#### Dependencies added
+None. Uses existing `latlong2`, `dart:math`, and `GpsMathUtils`.
+
+#### Known limitations
+- Braking detection operates only on the persisted GPS track — not computed in real time during an active drive.
+- GPS fix rate directly affects accuracy: at 1 s intervals a 3-second brake event gives only 3 data points. At 5 s intervals, the same event may appear as a single large deceleration step.
+- `minDecelerationMps2 = 0.5` is a conservative starting value. Physical-device testing with known braking events is required to calibrate this threshold for the specific Android device and GPS sensor used.
+- The 100 m cooldown may very occasionally merge two closely-spaced legitimate braking events (< 100 m apart at low urban speed).
+
+#### Not implemented (per spec — future phases)
+- Overall driving statistics / score (Phase 6.4)
+- Braking section UI in Trip Stats (Phase 6.5)
+- Braking event persistence to database (Phase 6.4/6.5)
+- Real-time braking alerts during driving
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **304 tests passed**:
+  - 245 pre-existing tests (Phases 5.1–6.2 + smoke test) ✅
+  - 59 new Phase 6.3 braking analysis tests ✅
+    - Group 1 — Empty/minimal tracks (3 tests): empty, single point, two points no braking
+    - Group 2 — Normal driving (4 tests): fluctuation, gradual decel, constant, moderate braking
+    - Group 3 — Hard braking (9 tests): single-segment, start/end speed, decel magnitude, timestamp, multi-segment, below minStart, threshold boundary (inclusive/exclusive/just-above)
+    - Group 4 — Sudden stop (5 tests): multi-segment stop, no double-count, non-stop hard brake, low-speed exclusion, entry speed
+    - Group 5 — Multiple events (2 tests): two separate events, hard+sudden in sequence
+    - Group 6 — GPS noise (4 tests): small fluctuations, stationary noise, near-zero speeds, single-spike with minBrakingSegments=2
+    - Group 7 — Cooldown/debounce (2 tests): within cooldown suppressed, after cooldown allowed
+    - Group 8 — Time gap handling (3 tests): large gap skipped, zero delta no crash, negative delta no crash
+    - Group 9 — Missing/invalid data (6 tests): missing speed fallback, all null speeds, duplicate timestamps, duplicate coords no NaN, tiny movement, mixed null/non-null
+    - Group 10 — Severity (4 tests): mild/hard/severe thresholds, severeCount increment
+    - Group 11 — Event fields (4 tests): valid coordinates, positive duration, non-negative speedReduction, count consistency
+    - Group 12 — BrakingAnalysis model (2 tests): empty factory, derived counts
+    - Group 13 — BrakingDetectorConfig (4 tests): default values, high threshold, low threshold, custom suddenStopEndSpeedKmh
+    - Group 14 — Service integration (4 tests): non-null on empty track, non-null on normal track, detects event, custom detector injection
+    - Group 15 — NaN/Infinity safety (2 tests): hard braking event finite, long track all finite
+    - Group 16 — Performance (1 test): 10 000 points in 27 ms
+- [x] BrakingEvent model with all required fields
+- [x] BrakingEventType (hardBraking, suddenStop)
+- [x] BrakingEventSeverity (mild, hard, severe)
+- [x] BrakingAnalysis with derived counts (single authoritative source)
+- [x] BrakingDetectorConfig with 8 centralised, documented thresholds
+- [x] BrakingDetector: single-pass O(n) algorithm
+- [x] Multi-point evidence requirement (minBrakingSegments)
+- [x] Cooldown/debounce (cooldownDistanceM)
+- [x] GPS noise resistance (minStartSpeed, maxTimeGap, speed source preference)
+- [x] Event deduplication (sudden stop is not also counted as hard braking)
+- [x] Severity derived from peak deceleration
+- [x] Event location = peak deceleration GPS coordinates
+- [x] Event timestamp = peak deceleration GPS timestamp
+- [x] No NaN or Infinity in any output
+- [x] Raw GPS speedKmh preferred over derived speed
+- [x] Derived speed fallback when raw speed unavailable
+- [x] Large time gaps skipped
+- [x] Zero/negative time deltas handled safely
+- [x] `DrivingAnalytics.brakingAnalysis` populated by `DrivingAnalyticsService`
+- [x] `BrakingAnalysis.empty()` returned for empty tracks
+- [x] Dependency injection: `BrakingDetector` injectable into service
+- [x] No database changes
+- [x] No UI changes
+- [x] No new packages
+- [x] All existing Phase 5 and Phase 6.1–6.2 tests continue passing
 
 ---
 
