@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import '../features/analytics/presentation/analytics_screen.dart';
 import '../features/cars/presentation/cars_screen.dart';
 import '../features/map/presentation/map_screen.dart';
+import '../features/profile/presentation/about_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
+import '../features/profile/presentation/settings_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
 import '../features/trips/presentation/trip_stats_screen.dart';
 import 'main_navigation.dart';
@@ -19,6 +21,25 @@ class AppRoutes {
   static const String cars = '/cars';
   static const String analytics = '/analytics';
   static const String profile = '/profile';
+
+  // ── Profile sub-routes ─────────────────────────────────────────────────────
+
+  /// Appearance settings — accessed from the Profile page.
+  static const String profileAppearance = '/profile/settings/appearance';
+
+  /// Map Appearance settings — accessed from the Profile page.
+  static const String profileMapAppearance = '/profile/settings/map-appearance';
+
+  /// Units settings — accessed from the Profile page.
+  static const String profileUnits = '/profile/settings/units';
+
+  /// Permissions settings — accessed from the Profile page.
+  static const String profilePermissions = '/profile/settings/permissions';
+
+  /// About TripRank page — accessed from the Profile page.
+  static const String profileAbout = '/profile/about';
+
+  // ── Trip routes ────────────────────────────────────────────────────────────
 
   /// Trip Stats screen — [tripId] is a UUID path parameter.
   ///
@@ -36,6 +57,9 @@ class AppRoutes {
 ///
 /// The Trip Stats screen (`/trips/:id`) lives inside the Trips branch so the
 /// bottom nav remains visible and the back-stack returns to the Trips list.
+///
+/// Profile sub-routes (settings, about) live inside the Profile branch so the
+/// bottom nav remains visible and the back button returns to Profile.
 final GoRouter appRouter = GoRouter(
   initialLocation: AppRoutes.map,
   debugLogDiagnostics: false,
@@ -102,6 +126,35 @@ final GoRouter appRouter = GoRouter(
             GoRoute(
               path: AppRoutes.profile,
               builder: (context, state) => const ProfileScreen(),
+              routes: [
+                // Individual settings sub-pages — each row on the Profile
+                // page navigates directly here, not to a shared settings hub.
+                GoRoute(
+                  path: 'settings/appearance',
+                  builder: (context, state) =>
+                      const SettingPlaceholderScreen(title: 'Appearance'),
+                ),
+                GoRoute(
+                  path: 'settings/map-appearance',
+                  builder: (context, state) =>
+                      const SettingPlaceholderScreen(title: 'Map Appearance'),
+                ),
+                GoRoute(
+                  path: 'settings/units',
+                  builder: (context, state) =>
+                      const SettingPlaceholderScreen(title: 'Units'),
+                ),
+                GoRoute(
+                  path: 'settings/permissions',
+                  builder: (context, state) =>
+                      const SettingPlaceholderScreen(title: 'Permissions'),
+                ),
+                // About TripRank
+                GoRoute(
+                  path: 'about',
+                  builder: (context, state) => const AboutScreen(),
+                ),
+              ],
             ),
           ],
         ),

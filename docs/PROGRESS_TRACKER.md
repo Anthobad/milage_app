@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 6.5 complete_
+_Last updated: 2026-08-22 — Phase 7.1 complete_
 
 ---
 
@@ -2313,7 +2313,129 @@ None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/s
 
 ## Phase 7 — Profile & Settings
 
-**Status: ⬜ Not started**
+**Status: 🔄 In Progress** _(Phase 7.1 complete)_
+
+---
+
+### Phase 7.1 — Profile Page
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+Implemented the full Profile page according to the locked design from `docs/feature_spec/profile_page.md`.
+
+- **`lib/features/profile/presentation/profile_screen.dart`** _(replaced)_ — Full ProfileScreen with four sections: Profile header (generic icon / local photo + "Driver" label + gear icon), Driving summary (all-vehicle Overall Driving card → navigates to Analytics), Settings section (Appearance, Map Appearance, Units, Permissions → navigates to Settings page), About section (About TripRank → navigates to About page). Vertically scrollable via `CustomScrollView`. Dark theme, rounded cards, consistent with existing TripRank design language.
+- **`lib/features/profile/presentation/settings_screen.dart`** _(new)_ — Minimal Settings page with four rows: Appearance, Map Appearance, Units, Permissions. Each row shows a "Coming soon" snackbar when tapped. Clean placeholder for later Phase 7 tasks.
+- **`lib/features/profile/presentation/about_screen.dart`** _(new)_ — Minimal About TripRank page with app icon, app name, and "More information coming soon" placeholder.
+- **`lib/features/profile/providers/profile_image_provider.dart`** _(new)_ — Minimal `ProfileImageNotifier` / `profileImageProvider`. Holds `String?` (absolute local path or `null`). `null` → generic icon (default). A future phase can call `setImagePath()` to display a user-selected photo. No cloud/account/network dependency.
+- **`lib/features/profile/providers/profile_driving_summary_provider.dart`** _(new)_ — `ProfileDrivingSummaryNotifier` / `profileDrivingSummaryProvider`. Loads **all trips from all vehicles** via `TripRepository.getAllTrips()` — intentionally NOT vehicle-scoped. Exposes `tripCount`, `totalDistanceKm`, `totalDurationSeconds` with formatted `distanceLabel` and `durationLabel` helpers. Entirely separate from `overallAnalyticsProvider` which is vehicle-scoped.
+- **`lib/app/router.dart`** _(modified)_ — Added `AppRoutes.profileSettings = '/profile/settings'` and `AppRoutes.profileAbout = '/profile/about'` constants. Added nested GoRoutes (`settings`, `about`) inside the Profile branch so the bottom nav remains visible and back returns to Profile.
+- **`test/features/profile/profile_page_test.dart`** _(new)_ — 14 widget tests + 5 model unit tests = 19 total. Uses `_FakeSummaryNotifier`, `_FakeImageNotifier`, `_FakeVehicleNotifier` with `ProviderScope.overrides`. GoRouter stubs for navigation verification. No SQLite, GPS, or network required.
+
+#### Profile page structure
+
+```
+PROFILE                              ⚙️
+         [ generic icon / photo ]
+                Driver
+
+DRIVING
+┌────────────────────────────────────┐
+│  Overall Driving               >   │
+│  Trips    Distance    Time         │
+│   ...       ...       ...          │
+└────────────────────────────────────┘
+
+SETTINGS
+┌────────────────────────────────────┐
+│  Appearance                    >   │
+│  Map Appearance                >   │
+│  Units                         >   │
+│  Permissions                   >   │
+└────────────────────────────────────┘
+
+ABOUT
+┌────────────────────────────────────┐
+│  About TripRank                >   │
+└────────────────────────────────────┘
+```
+
+#### Important product decisions enforced
+
+- No Settings in bottom navigation (Profile is the entry point)
+- No My Cars section
+- No user-name system
+- No first-launch name / image prompt
+- No Voice setting (Google Maps handles voice)
+- No Export Data
+- Profile image is optional — generic icon by default, no onboarding
+- Driving summary is all-vehicle — not dependent on currently selected vehicle
+
+#### Data source for Driving summary
+
+`TripRepository.getAllTrips()` → aggregates every trip in the database regardless of vehicle (including trips with `vehicle_id = NULL`). Returns `tripCount`, `totalDistanceKm`, `totalDurationSeconds`. This is NOT the Phase 6.6 `overallAnalyticsProvider` (which is vehicle-scoped).
+
+#### Navigation wiring
+
+| Action | Destination |
+|---|---|
+| Gear icon tap | `/profile/settings` (SettingsScreen) |
+| Overall Driving card tap | `/analytics` (AnalyticsScreen) |
+| About TripRank row tap | `/profile/about` (AboutScreen) |
+| Settings rows tap | `/profile/settings` (SettingsScreen) |
+
+#### Profile image handling
+
+`profileImageProvider` holds `null` (no image). The `_AvatarCircle` widget reads the provider and falls back to `Icons.person_outline` when `null`. A future phase can call `ProfileImageNotifier.setImagePath(path)` to display a local file. No packages added.
+
+#### Files created
+- `lib/features/profile/presentation/settings_screen.dart`
+- `lib/features/profile/presentation/about_screen.dart`
+- `lib/features/profile/providers/profile_image_provider.dart`
+- `lib/features/profile/providers/profile_driving_summary_provider.dart`
+- `test/features/profile/profile_page_test.dart`
+
+#### Files modified
+- `lib/features/profile/presentation/profile_screen.dart` (full replacement of placeholder)
+- `lib/app/router.dart` (added profileSettings, profileAbout routes)
+
+#### Tests performed (19 total)
+
+Widget tests (14):
+1. Profile page renders without crashing
+2. Gear icon is present in the app bar
+3. Driver label is present
+4. Generic profile icon shown when no image is set
+5. No "My Cars" section is present
+6. Driving summary section exists
+7. Driving summary shows all-vehicle data (not vehicle-scoped)
+8. Settings section contains Appearance, Map Appearance, Units, Permissions
+9. Voice setting is NOT present
+10. Export Data is NOT present
+11. About TripRank row is present
+12. Tapping gear icon navigates to Settings page
+13. Tapping driving summary card navigates to Analytics
+14. Narrow screen (320 px wide) does not overflow
+
+Model unit tests (5):
+- distanceLabel formats km values correctly
+- distanceLabel formats sub-1 km values as metres
+- durationLabel formats hours and minutes
+- durationLabel formats minutes only
+- zero state has zero values
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- `flutter test` → **483 tests passed** (464 pre-existing + 19 new Phase 7.1 tests)
+
+#### Deferred work
+- Actual image selection UI (image_picker or file_picker) — a future Phase 7 task
+- SharedPreferences persistence for the selected image path
+- Individual settings page implementations (Appearance, Map Appearance, Units, Permissions) — later Phase 7 tasks
+- About TripRank content (version, licenses, etc.) — later Phase 7 tasks
 
 ---
 
