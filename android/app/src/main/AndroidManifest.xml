@@ -16,7 +16,7 @@
     <!-- Required for querying whether Google Maps is installed -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <application
-        android:label="triprank_project"
+        android:label="Mileage"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

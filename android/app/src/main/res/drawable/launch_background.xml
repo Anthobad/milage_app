@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!-- Mileage launch/splash screen: dark background (#121212) with centered Mileage icon.
+     This is the native Android launch background displayed before Flutter initializes.
+     Uses @mipmap/launch_image so the correct density variant is selected automatically. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/white" />
+    <!-- Dark background — matches Mileage's default dark theme -->
+    <item android:drawable="@color/launch_background_color" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    <!-- Mileage icon centered on the screen -->
+    <item>
         <bitmap
             android:gravity="center"
             android:src="@mipmap/launch_image" />
-    </item> -->
+    </item>
 </layer-list>

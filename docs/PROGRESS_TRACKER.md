@@ -2977,4 +2977,129 @@ None — routing was already wired in Phase 7.1.
 
 ## Phase 8 — Testing & Polish
 
-**Status: ⬜ Not started**
+**Status: 🔄 In Progress** _(Phase 8.1 complete)_
+
+---
+
+### Phase 8.1 — Mileage App Icon & Launch Screen
+
+**Status: ✅ Done**
+**Completed: 2026-08-23**
+
+#### What was done
+
+Replaced the default Flutter branding with Mileage branding in two places: the Android launcher icon and the Android native launch/splash screen.
+
+#### Source icon asset
+
+`assets/images/mileage_icon.png` — 500 × 500 px, RGBA PNG. This is the pre-existing Mileage icon used by the About Mileage page. No new artwork was created; no existing artwork was modified.
+
+#### Android launcher icon
+
+Generated `ic_launcher.png` from the source asset at all required Android mipmap densities using Python (Pillow, LANCZOS resampling):
+
+| Density | Size | File |
+|---|---|---|
+| mipmap-mdpi | 48 × 48 | `android/app/src/main/res/mipmap-mdpi/ic_launcher.png` |
+| mipmap-hdpi | 72 × 72 | `android/app/src/main/res/mipmap-hdpi/ic_launcher.png` |
+| mipmap-xhdpi | 96 × 96 | `android/app/src/main/res/mipmap-xhdpi/ic_launcher.png` |
+| mipmap-xxhdpi | 144 × 144 | `android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png` |
+| mipmap-xxxhdpi | 192 × 192 | `android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png` |
+
+The `AndroidManifest.xml` `android:icon="@mipmap/ic_launcher"` attribute was already in place. No changes were needed to the `android:icon` attribute.
+
+The About Mileage page continues to use `Image.asset('assets/images/mileage_icon.png')` — unchanged and unaffected.
+
+#### Android app label
+
+`AndroidManifest.xml` `android:label` changed from `"triprank_project"` to `"Mileage"`.
+
+The launcher now displays **Mileage** as the application name.
+
+#### Android launch / splash screen
+
+The native Android launch screen (displayed before Flutter initializes) was replaced with Mileage branding.
+
+**Mechanism:** Native Android `WindowBackground` — the system renders the `<activity android:theme="@style/LaunchTheme">` background as soon as the process starts, before any Flutter code runs. Flutter removes it automatically when it draws its first frame.
+
+**Background color:** `#121212` (matches `AppColors.surfaceDark` from the Flutter theme — dark-first branding).
+
+**Launch icon sizes** (2× launcher sizes so the icon is comfortably visible on-screen):
+
+| Density | Size | File |
+|---|---|---|
+| mipmap-mdpi | 96 × 96 | `android/app/src/main/res/mipmap-mdpi/launch_image.png` |
+| mipmap-hdpi | 144 × 144 | `android/app/src/main/res/mipmap-hdpi/launch_image.png` |
+| mipmap-xhdpi | 192 × 192 | `android/app/src/main/res/mipmap-xhdpi/launch_image.png` |
+| mipmap-xxhdpi | 288 × 288 | `android/app/src/main/res/mipmap-xxhdpi/launch_image.png` |
+| mipmap-xxxhdpi | 384 × 384 | `android/app/src/main/res/mipmap-xxxhdpi/launch_image.png` |
+
+#### Android configuration files
+
+**`drawable/launch_background.xml`** and **`drawable-v21/launch_background.xml`** — `layer-list` with:
+1. `@color/launch_background_color` (`#121212`) as the background
+2. `<bitmap android:gravity="center" android:src="@mipmap/launch_image" />` — Mileage icon, centered
+
+**`values/colors.xml`** _(new)_ — defines `launch_background_color = #121212`
+
+**`values/styles.xml`** — `LaunchTheme` parent changed from `Theme.Light.NoTitleBar` to `Theme.Black.NoTitleBar`. `NormalTheme` also uses `Theme.Black.NoTitleBar` to prevent a white window flash after Flutter initialises. Both themes reference `@drawable/launch_background`.
+
+**`values-night/styles.xml`** — same configuration as `values/styles.xml` (Mileage is dark-first; both light and dark OS modes show the same dark splash).
+
+#### Dark-first branding
+
+Both `values/styles.xml` and `values-night/styles.xml` use `Theme.Black.NoTitleBar` as the `LaunchTheme` parent. The `#121212` background is consistent whether the OS is in light or dark mode. There is no white flash.
+
+#### Files created
+
+- `android/app/src/main/res/values/colors.xml`
+- `android/app/src/main/res/mipmap-*/launch_image.png` (5 files, one per density)
+
+#### Files modified
+
+- `android/app/src/main/AndroidManifest.xml` — `android:label` → `"Mileage"`
+- `android/app/src/main/res/drawable/launch_background.xml` — dark bg + Mileage icon
+- `android/app/src/main/res/drawable-v21/launch_background.xml` — dark bg + Mileage icon
+- `android/app/src/main/res/values/styles.xml` — `LaunchTheme` and `NormalTheme` → `Theme.Black.NoTitleBar`
+- `android/app/src/main/res/values-night/styles.xml` — same
+- `android/app/src/main/res/mipmap-*/ic_launcher.png` (5 files, regenerated at correct densities)
+
+#### Dependencies added
+
+None. Icon generation used Python (Pillow) as a one-time build step — no new runtime or dev dependencies added to `pubspec.yaml`.
+
+#### Automated verification
+
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- `flutter test` → **635 tests passed** (0 regressions; all pre-Phase 8.1 tests continue passing)
+- Existing About Mileage page: still uses `assets/images/mileage_icon.png` — unaffected ✅
+
+#### Physical-device verification
+
+**Required — not yet performed.**
+
+The following must be verified on a physical Android device after installing the new APK over the existing Mileage installation (do NOT uninstall — existing trip data must be preserved):
+
+**Launcher:**
+- [ ] Mileage icon appears correctly in the launcher
+- [ ] Icon is not cropped unexpectedly
+- [ ] Icon is not stretched or distorted
+- [ ] App name reads "Mileage" (not "TripRank", "triprank_project", or "Flutter")
+
+**Startup:**
+- [ ] Launch Mileage from the launcher
+- [ ] First visible branding is the Mileage icon on a dark (#121212) background
+- [ ] No Flutter logo is visible at any point during startup
+- [ ] No white or incorrect background flash is visible
+- [ ] Mileage icon is centered correctly on the splash screen
+- [ ] Splash transitions smoothly to the Flutter UI
+
+**Existing data:**
+- [ ] Installing the new APK over the existing installation does NOT delete existing trips, vehicles, or preferences
+- [ ] App opens to the normal Mileage UI after the splash screen
+
+#### Known limitations
+
+- No adaptive icon (`mipmap-anydpi-v26/ic_launcher.xml` + foreground/background layers) was created. The launcher icon will use the legacy square/round bitmap on Android 8.0+. Adaptive icon support can be added in a future phase.
+- Physical-device verification is required before this phase can be considered fully complete (see checklist above).

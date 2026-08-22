@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark background used for the Mileage launch/splash screen.
+         Matches AppColors.surfaceDark (#121212) from the Flutter theme. -->
+    <color name="launch_background_color">#121212</color>
+</resources>
