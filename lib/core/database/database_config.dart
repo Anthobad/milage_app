@@ -14,10 +14,10 @@
 //
 //   Version 1 — Phase 5.1: Foundation (db_metadata table only).
 //   Version 2 — Phase 5.2: vehicles table + selected_vehicle_id metadata key.
-//   Version 3 — Phase 5.3: trips table.
+//   Version 3 — Phase 5.3: trips table (vehicle_id ON DELETE SET NULL).
 //   Version 4 — Phase 5.4: trip_track_points table.
-//   Version 5 — Phase 5.5: driving_events table.    (not yet)
-//   Version 6 — Phase 5.6: user_preferences table.  (not yet)
+//   Version 5 — Feature:   trips.vehicle_id changed to ON DELETE CASCADE
+//                           (deleting a vehicle now deletes its trips).
 
 /// Name of the SQLite database file stored on-device.
 ///
@@ -29,7 +29,7 @@ const String kDatabaseName = 'triprank.db';
 ///
 /// Increment this by 1 each time the schema changes and add the matching
 /// migration step in [AppDatabase._migrate].
-const int kDatabaseVersion = 4;
+const int kDatabaseVersion = 5;
 
 // ---------------------------------------------------------------------------
 // Table name constants

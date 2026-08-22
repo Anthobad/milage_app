@@ -83,7 +83,7 @@ Future<Database> _openDb() async {
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTripsTable (
             id TEXT PRIMARY KEY,
-            vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+            vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
             mode TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
             duration_seconds INTEGER NOT NULL, distance_km REAL NOT NULL,
             start_latitude REAL NOT NULL, start_longitude REAL NOT NULL,

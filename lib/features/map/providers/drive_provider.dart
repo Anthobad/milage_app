@@ -399,7 +399,7 @@ class DriveNotifier extends Notifier<DriveState> {
       activeTripId: recoveredTripId,
       // vehicleId and destination are not persisted in SharedPreferences — they
       // will be null after recovery. The trip will still be created with a null
-      // vehicleId, which is valid per the schema (ON DELETE SET NULL).
+      // vehicleId, which is valid per the schema (vehicle_id is nullable).
     );
 
     // Invalidate the trips list so the Trips page reflects any trips that

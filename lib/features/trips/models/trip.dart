@@ -55,7 +55,7 @@ enum TripMode {
 ///    `destination*` fields are null.
 ///
 /// 4. **Vehicle relationship via nullable FK**: [vehicleId] is nullable so that
-///    historical trips survive vehicle deletion (`ON DELETE SET NULL`).
+///    trips are deleted when the vehicle is deleted (`ON DELETE CASCADE`).
 ///
 /// ## Statistics not yet available
 ///
@@ -92,8 +92,10 @@ class Trip {
 
   /// ID of the vehicle used for this trip.
   ///
-  /// Nullable: set to null when the referenced vehicle is deleted so the
-  /// historical trip record is preserved.
+  /// Nullable: the vehicle may have been deleted.  When the referenced vehicle
+  /// is deleted the trip itself is also deleted (ON DELETE CASCADE), but this
+  /// field is nullable so trips recorded without a selected vehicle are still
+  /// valid.
   final String? vehicleId;
 
   /// Drive mode this trip was recorded in.

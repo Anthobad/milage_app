@@ -94,7 +94,8 @@ class AppDatabase {
   /// Enables foreign key constraint enforcement.
   ///
   /// SQLite disables foreign key constraints by default. Enabling them here
-  /// ensures that ON DELETE SET NULL (trips → vehicles) is applied correctly.
+  /// ensures that ON DELETE CASCADE (trips → vehicles, track_points → trips)
+  /// is applied correctly.
   Future<void> _onConfigure(Database db) async {
     await db.execute('PRAGMA foreign_keys = ON');
   }
@@ -141,6 +142,55 @@ class AppDatabase {
         await _createTrackPointsTable(db);
         break;
 
+      // ── Version 5 — trips.vehicle_id ON DELETE CASCADE ───────────────────
+      //
+      // SQLite does not support ALTER TABLE to change a FK constraint, so we
+      // recreate the trips table with the new constraint and copy the data.
+      //
+      // The track-points table already has ON DELETE CASCADE on trip_id, so
+      // existing GPS points are preserved — they stay linked to the same
+      // trip IDs which remain valid after the table rename/recreate.
+      case 5:
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS trips_v5 (
+            id                      TEXT    PRIMARY KEY,
+            vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
+            mode                    TEXT    NOT NULL,
+            start_time              TEXT    NOT NULL,
+            end_time                TEXT    NOT NULL,
+            duration_seconds        INTEGER NOT NULL,
+            distance_km             REAL    NOT NULL,
+            start_latitude          REAL    NOT NULL,
+            start_longitude         REAL    NOT NULL,
+            start_name              TEXT,
+            destination_latitude    REAL,
+            destination_longitude   REAL,
+            destination_name        TEXT,
+            average_speed_kmh       REAL,
+            minimum_speed_kmh       REAL,
+            maximum_speed_kmh       REAL,
+            minimum_altitude_m      REAL,
+            maximum_altitude_m      REAL,
+            stops                   INTEGER,
+            created_at              TEXT    NOT NULL
+          )
+        ''');
+        await db.execute(
+          'INSERT INTO trips_v5 SELECT * FROM $kTripsTable',
+        );
+        await db.execute('DROP TABLE $kTripsTable');
+        await db.execute('ALTER TABLE trips_v5 RENAME TO $kTripsTable');
+        // Recreate indexes dropped with the old table.
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id
+            ON $kTripsTable (vehicle_id)
+        ''');
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_trips_start_time
+            ON $kTripsTable (start_time)
+        ''');
+        break;
+
       default:
         // ignore: avoid_print
         print('[AppDatabase] Unknown migration target version: $targetVersion');
@@ -184,11 +234,12 @@ class AppDatabase {
   /// Creates the [kTripsTable] table.
   ///
   /// Schema notes:
-  /// - [vehicle_id] is nullable with ON DELETE SET NULL so historical trips
-  ///   survive vehicle deletion.
+  /// - [vehicle_id] is nullable with ON DELETE CASCADE — deleting a vehicle
+  ///   also deletes all of its trips (and by extension their track points via
+  ///   the track-points cascade).
   /// - Speed and altitude fields are REAL NULL — computed from track points
   ///   at completion.  Null when fewer than one point was recorded.
-  /// - [stops] is INTEGER NULL — stop detection is not yet implemented.
+  /// - [stops] is INTEGER NULL — populated by stop detection at drive end.
   /// - Timestamps are stored as ISO-8601 UTC strings.
   /// - [duration_seconds] is an integer (whole seconds).
   /// - Indexes on [vehicle_id] and [start_time] for efficient queries.
@@ -196,7 +247,7 @@ class AppDatabase {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $kTripsTable (
         id                      TEXT    PRIMARY KEY,
-        vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+        vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
         mode                    TEXT    NOT NULL,
         start_time              TEXT    NOT NULL,
         end_time                TEXT    NOT NULL,

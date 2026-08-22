@@ -54,7 +54,8 @@ class _DeleteVehicleDialogState extends ConsumerState<DeleteVehicleDialog> {
       title: const Text('Delete Vehicle?'),
       content: Text(
         'Are you sure you want to delete '
-        '${widget.vehicle.brand} ${widget.vehicle.model}?',
+        '${widget.vehicle.brand} ${widget.vehicle.model}?\n\n'
+        'All trips recorded with this vehicle will also be permanently deleted.',
         style: theme.textTheme.bodyMedium,
       ),
       actions: [

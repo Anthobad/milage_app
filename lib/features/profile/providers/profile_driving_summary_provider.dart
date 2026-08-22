@@ -13,8 +13,9 @@
 // ## Data source
 //
 // Uses TripRepository.getAllTrips() — returns every trip regardless of
-// which vehicle recorded it, including trips whose vehicle was later deleted
-// (vehicle_id = NULL after ON DELETE SET NULL).
+// which vehicle recorded it, including trips recorded without a vehicle
+// (vehicleId is nullable; trips linked to a vehicle are deleted with it
+// via ON DELETE CASCADE, but trips with vehicleId = null are kept).
 //
 // ## Statistics exposed
 //

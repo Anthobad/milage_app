@@ -19,7 +19,7 @@ void _initFfi() {
   databaseFactory = databaseFactoryFfi;
 }
 
-/// Creates a fresh in-memory database with the full v4 schema (all 4 tables).
+/// Creates a fresh in-memory database with the full v5 schema (all 4 tables).
 Future<Database> _openTestDb() async {
   return databaseFactoryFfi.openDatabase(
     inMemoryDatabasePath,
@@ -27,7 +27,7 @@ Future<Database> _openTestDb() async {
       version: kDatabaseVersion,
       singleInstance: false,
       onConfigure: (db) async {
-        // Enable foreign key enforcement so ON DELETE SET NULL / CASCADE works.
+        // Enable foreign key enforcement so ON DELETE CASCADE works.
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onCreate: (db, version) async {
@@ -50,11 +50,11 @@ Future<Database> _openTestDb() async {
             updated_at  TEXT    NOT NULL
           )
         ''');
-        // trips
+        // trips — vehicle_id ON DELETE CASCADE (v5)
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTripsTable (
             id                      TEXT    PRIMARY KEY,
-            vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+            vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
             mode                    TEXT    NOT NULL,
             start_time              TEXT    NOT NULL,
             end_time                TEXT    NOT NULL,
@@ -79,7 +79,7 @@ Future<Database> _openTestDb() async {
             'CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON $kTripsTable (vehicle_id)');
         await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_trips_start_time ON $kTripsTable (start_time DESC)');
-        // trip_track_points (v4)
+        // trip_track_points
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTrackPointsTable (
             id               TEXT    PRIMARY KEY,
@@ -503,7 +503,7 @@ void main() {
               await db.execute('''
                 CREATE TABLE IF NOT EXISTS $kTripsTable (
                   id TEXT PRIMARY KEY,
-                  vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+                  vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
                   mode TEXT NOT NULL, start_time TEXT NOT NULL,
                   end_time TEXT NOT NULL, duration_seconds INTEGER NOT NULL,
                   distance_km REAL NOT NULL, start_latitude REAL NOT NULL,
@@ -616,9 +616,9 @@ void main() {
     await db.close();
   });
 
-  // ── Test 19: Deleting a vehicle does NOT delete its historical trips ───────
+  // ── Test 19: Deleting a vehicle deletes its trips (CASCADE) ─────────────
 
-  test('19. deleting a vehicle does NOT delete its historical trips', () async {
+  test('19. deleting a vehicle deletes its trips (ON DELETE CASCADE)', () async {
     final (:repo, :db) = await _openRepo();
     final vehicleRepo = VehicleRepository(db);
 
@@ -633,31 +633,37 @@ void main() {
     final before = await repo.getTripById('linked_trip');
     expect(before!.vehicleId, 'del_v');
 
-    // Delete the vehicle.
+    // Delete the vehicle — CASCADE must delete the trip too.
     await vehicleRepo.delete('del_v');
 
-    // Trip must still exist.
+    // Trip must be gone.
     final after = await repo.getTripById('linked_trip');
-    expect(after, isNotNull, reason: 'Trip must survive vehicle deletion');
+    expect(after, isNull, reason: 'Trip must be deleted when its vehicle is deleted (CASCADE)');
 
     await db.close();
   });
 
-  // ── Test 20: Historical trip accessible after vehicle deletion ────────────
+  // ── Test 20: Trips without a vehicle are accessible, trips with a deleted vehicle are not ──
 
-  test('20. vehicle_id is NULL on trip after vehicle is deleted', () async {
+  test('20. trip with no vehicle is accessible; trip is deleted when its vehicle is deleted', () async {
     final (:repo, :db) = await _openRepo();
     final vehicleRepo = VehicleRepository(db);
 
+    // A trip without a vehicle (vehicleId: null) must always be accessible.
+    await repo.createTrip(_makeTrip(id: 'no_vehicle_trip'));
+    final noVehicle = await repo.getTripById('no_vehicle_trip');
+    expect(noVehicle, isNotNull);
+    expect(noVehicle!.vehicleId, isNull);
+
+    // A trip linked to a vehicle is deleted when the vehicle is deleted (CASCADE).
     await vehicleRepo.create(_makeVehicle('v_del'));
-    await repo.createTrip(_makeTrip(id: 'orphan', vehicleId: 'v_del'));
+    await repo.createTrip(_makeTrip(id: 'linked', vehicleId: 'v_del'));
 
     await vehicleRepo.delete('v_del');
 
-    final trip = await repo.getTripById('orphan');
-    expect(trip, isNotNull);
-    // ON DELETE SET NULL — vehicleId becomes null after vehicle is deleted.
-    expect(trip!.vehicleId, isNull);
+    final deleted = await repo.getTripById('linked');
+    expect(deleted, isNull,
+        reason: 'Trip must be deleted (CASCADE) when its vehicle is deleted');
 
     await db.close();
   });

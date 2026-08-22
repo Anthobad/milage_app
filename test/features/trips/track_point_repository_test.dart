@@ -23,10 +23,10 @@ void _initFfi() {
 }
 
 // ---------------------------------------------------------------------------
-// Schema helper — full v4 schema (4 tables)
+// Schema helper — full v5 schema (4 tables)
 // ---------------------------------------------------------------------------
 
-/// Opens a fresh in-memory database with the complete v4 schema.
+/// Opens a fresh in-memory database with the complete v5 schema.
 ///
 /// [singleInstance] is false so every call gets an independent connection —
 /// no singleton bleed between tests.
@@ -59,11 +59,11 @@ Future<Database> _openTestDb() async {
             updated_at  TEXT    NOT NULL
           )
         ''');
-        // trips
+        // trips — vehicle_id ON DELETE CASCADE (v5)
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTripsTable (
             id                      TEXT    PRIMARY KEY,
-            vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+            vehicle_id              TEXT    REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
             mode                    TEXT    NOT NULL,
             start_time              TEXT    NOT NULL,
             end_time                TEXT    NOT NULL,
@@ -90,7 +90,7 @@ Future<Database> _openTestDb() async {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_trips_start_time ON $kTripsTable (start_time DESC)',
         );
-        // trip_track_points (v4)
+        // trip_track_points
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTrackPointsTable (
             id               TEXT    PRIMARY KEY,
@@ -641,9 +641,10 @@ void main() {
     await db.close();
   });
 
-  // ── Test 11: Deleting a Vehicle does NOT delete track points ──────────────
+  // ── Test 11: Deleting a Vehicle deletes its Trips and their track points ───
 
-  test('11. deleting a Vehicle does NOT delete Trip track points', () async {
+  test('11. deleting a Vehicle deletes its Trips and their track points (CASCADE)',
+      () async {
     final db = await _openTestDb();
     final vehicleRepo = VehicleRepository(db);
     final tripRepo = TripRepository(db);
@@ -659,18 +660,17 @@ void main() {
       ));
     }
 
-    // Delete the vehicle.
+    // Delete the vehicle — CASCADE: vehicle → trips → track points.
     await vehicleRepo.delete('v_del');
 
-    // Trip must still exist (ON DELETE SET NULL).
+    // Trip must be deleted (ON DELETE CASCADE on vehicle_id).
     final trip = await tripRepo.getTripById('tripWithVehicle');
-    expect(trip, isNotNull, reason: 'Trip must survive vehicle deletion');
-    expect(trip!.vehicleId, isNull, reason: 'vehicleId must be SET NULL');
+    expect(trip, isNull, reason: 'Trip must be deleted when its vehicle is deleted (CASCADE)');
 
-    // Track points must still exist.
+    // Track points must also be gone (cascaded via trip deletion).
     final points = await trackRepo.getTrackPointsForTrip('tripWithVehicle');
-    expect(points.length, 3,
-        reason: 'Track points must survive vehicle deletion');
+    expect(points, isEmpty,
+        reason: 'Track points must be deleted when the parent trip is deleted');
 
     await db.close();
   });

@@ -42,7 +42,7 @@ Future<Database> _openTestDb() async {
         await db.execute('''
           CREATE TABLE IF NOT EXISTS $kTripsTable (
             id TEXT PRIMARY KEY,
-            vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE SET NULL,
+            vehicle_id TEXT REFERENCES $kVehiclesTable(id) ON DELETE CASCADE,
             mode TEXT NOT NULL, start_time TEXT NOT NULL, end_time TEXT NOT NULL,
             duration_seconds INTEGER NOT NULL, distance_km REAL NOT NULL,
             start_latitude REAL NOT NULL, start_longitude REAL NOT NULL,
@@ -285,7 +285,7 @@ void main() {
       expect([], isEmpty); // Represents the provider short-circuit.
     });
 
-    test('12. trip vehicle_id set to null when vehicle is deleted', () async {
+    test('12. trip is deleted when its vehicle is deleted (CASCADE)', () async {
       final db = await _openTestDb();
       final vehicleRepo = VehicleRepository(db);
       final tripRepo = TripRepository(db);
@@ -296,8 +296,7 @@ void main() {
       await vehicleRepo.delete('ve');
 
       final trip = await tripRepo.getTripById('te1');
-      expect(trip, isNotNull);
-      expect(trip!.vehicleId, isNull); // ON DELETE SET NULL
+      expect(trip, isNull, reason: 'Trip must be deleted when its vehicle is deleted (CASCADE)');
       await db.close();
     });
   });
