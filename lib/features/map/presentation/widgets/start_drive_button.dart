@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
-import '../../../trips/providers/trips_filter_provider.dart';
 import '../../models/drive_state.dart';
 import '../../providers/destination_provider.dart';
 import '../../providers/drive_provider.dart';
@@ -116,11 +115,8 @@ class StartDriveButton extends ConsumerWidget {
       if (!context.mounted) return;
 
       if (tripId != null) {
-        // Invalidate the trips list so the Trips page shows the new trip
-        // immediately when the user navigates there.
-        ref.invalidate(vehicleTripsProvider);
-
         // Navigate to Trip Stats for the completed trip.
+        // vehicleTripsProvider is already invalidated inside finishDrive().
         context.go(AppRoutes.tripStatsPath(tripId));
       } else {
         // Persistence failed — inform the user but do not navigate.

@@ -11,6 +11,7 @@ import '../../trips/models/track_point_record.dart';
 import '../../trips/models/trip.dart';
 import '../../trips/providers/track_point_repository_provider.dart';
 import '../../trips/providers/trip_repository_provider.dart';
+import '../../trips/providers/trips_filter_provider.dart';
 import 'map_provider.dart';
 
 // ---------------------------------------------------------------------------
@@ -155,6 +156,12 @@ class DriveNotifier extends Notifier<DriveState> {
     // _onDriveUpdate on every GPS fix — it is the most reliable source.
     final completedTripId = await _persistTripAndPoints(driveSnapshot);
 
+    // Invalidate the trips list so the Trips page always shows the new trip
+    // regardless of which UI path triggered the finish (FINISH button,
+    // "End Drive" dialog, map top bar, etc.) and regardless of whether the
+    // app was in the background or the main isolate was restarted.
+    ref.invalidate(vehicleTripsProvider);
+
     // Reset to idle — active-drive stats must not persist to the next drive.
     state = const DriveState();
 
@@ -177,6 +184,9 @@ class DriveNotifier extends Notifier<DriveState> {
       );
       await _controller.stopDrive(); // stop service; ignore SharedPrefs result
       await _persistTripAndPoints(driveSnapshot);
+
+      // Invalidate so the Trips page reflects the saved trip immediately.
+      ref.invalidate(vehicleTripsProvider);
     }
     state = const DriveState();
   }
@@ -355,6 +365,12 @@ class DriveNotifier extends Notifier<DriveState> {
       // will be null after recovery. The trip will still be created with a null
       // vehicleId, which is valid per the schema (ON DELETE SET NULL).
     );
+
+    // Invalidate the trips list so the Trips page reflects any trips that
+    // were persisted to SQLite before the process was killed.  This covers
+    // the case where the user navigates to Trips before pressing FINISH on
+    // the recovered drive.
+    ref.invalidate(vehicleTripsProvider);
   }
 
   // ---------------------------------------------------------------------------
