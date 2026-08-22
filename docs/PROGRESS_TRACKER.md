@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 6.4.1 complete_
+_Last updated: 2026-08-22 — Phase 6.5 complete_
 
 ---
 
@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: 🔄 In progress** _(6.1, 6.2, 6.3, 6.4, 6.4.1 complete)_
+**Status: ✅ Completed** _(6.1, 6.2, 6.3, 6.4, 6.4.1, 6.5 complete)_
 
 ---
 
@@ -1924,6 +1924,155 @@ None.
     - Group 23 (2 tests): NaN / Infinity safety
     - Group 24 (1 test): Performance (10 000 points)
     - Group 25 (3 tests): SQLite round-trip (stops field persisted)
+
+---
+
+---
+
+### Phase 6.5 — Trip Statistics & Analytics UI Integration
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+- **`lib/features/trips/presentation/trip_stats_screen.dart`** _(replaced)_ — TripStatsScreen completely rewritten to use `tripAnalyticsProvider(tripId)` as the sole data source. The previous implementation used `tripStatsProvider` (which only loaded trip summary + raw track points). The new implementation loads the full `TripAnalyticsState` which includes the persisted `Trip`, all `DrivingAnalytics` sub-analyses (speed, altitude, turns, braking, stops), and `analyzedPoints` for graphs.
+- **`test/features/trips/trip_stats_ui_test.dart`** _(new)_ — 21 widget tests (19 required + 2 bonus) covering all specified scenarios. Uses `ProviderScope.overrides` with fake notifiers that extend the real notifiers, injecting deterministic `TripAnalyticsState` and `VehicleState` without touching SQLite.
+
+#### Trip Stats UI sections (top → bottom)
+
+1. **Trip header** — Date (`DD Mon YYYY`) + time (`HH:MM`). Destination mode: FROM label with `startName`/coordinates and TO label with `destinationName`. Reckless mode: "Free Drive — no destination".
+2. **Route map** — `flutter_map` with OSM tiles. Polyline from `analyzedPoints` lat/lng. Auto-fits to route on first load. Start (green) and end (red) markers. Loading chip while analytics load. Offline-safe: tile errors are silently swallowed; polyline remains visible.
+3. **Main stats card** — Distance, duration, stops from persisted `Trip`. Vehicle name from `vehicleProvider`. Graceful fallback ("Vehicle unavailable") when vehicle was deleted.
+4. **Speed stats card** — Avg/min/max speed from persisted `Trip` values. Only shown when `trip.averageSpeedKmh != null`. NaN/Infinity guarded.
+5. **Altitude stats card** — Min/max altitude from persisted `Trip` values. Only shown when `trip.minimumAltitudeM != null`.
+6. **Speed graph** — `InteractiveGraph` widget fed `DataPoint` list from `analyzedPoints.bestSpeedKmh`. X-axis = elapsed seconds from `trip.startTime`. Full width, no horizontal scrolling. Touch/drag to select point and show tooltip.
+7. **Altitude graph** — Same as speed graph but using `analyzedPoints.altitude`. Shows "No altitude data recorded." when all altitude values are null.
+8. **Details section** — Trip mode (Destination / Free Drive), elevation gain/loss from `altitudeAnalysis` (only when non-null/non-NaN), U-turn count from `turnAnalysis` (only when > 0). Loading spinner shown while analytics compute.
+9. **Safety events card** — Hard braking count, sudden stop count, and stop count (prefers persisted `trip.stops`, falls back to `stopAnalysis.stopCount`). Loading spinner while braking analysis computes.
+10. **Turn split bar** — `TurnSplitBar` wired to real `turnAnalysis.leftTurns` and `turnAnalysis.rightTurns`. Loading spinner before turn analysis is available. Zero-turn empty state handled. U-turns excluded from bar counts (displayed in Details section instead).
+
+#### Data source rule
+
+```
+TripStatsScreen
+      ↓
+tripAnalyticsProvider(tripId)
+      ↓
+TripAnalyticsState
+      ├── Trip (persisted values: distance, duration, speed/altitude extremes, stops, destination)
+      └── DrivingAnalytics
+           ├── analyzedPoints   → route polyline, speed graph, altitude graph
+           ├── SpeedAnalysis    → (used internally; persisted Trip values take precedence for display)
+           ├── AltitudeAnalysis → elevation gain/loss in Details section
+           ├── TurnAnalysis     → TurnSplitBar + U-turn count in Details
+           ├── BrakingAnalysis  → Safety events card
+           └── StopAnalysis     → Safety events card (stop count fallback)
+```
+
+#### Loading/error states
+
+- `trip == null && isLoading == true` → full-screen `CircularProgressIndicator`
+- `trip == null && error != null` → full-screen `_ErrorView` with error message
+- `trip != null && isLoading == true` → trip header + map + summary cards visible immediately; graph/analytics sections show compact loading spinners
+- `trip != null && error != null` → "Analytics unavailable" chip on map; graph sections show loading state; non-crashing
+
+#### Responsive layout
+
+- All cards use `width: double.infinity` inside `_Card` — expand to available width without overflowing.
+- `_StatCell` values use `maxLines: 1, overflow: TextOverflow.ellipsis` — no RenderFlex overflow on narrow screens.
+- `_LocationRow` name uses `maxLines: 2, overflow: TextOverflow.ellipsis` — long destination names wrap correctly.
+- `_SectionTitle` text uses `Flexible` wrapper with ellipsis.
+- `TurnSplitBar` uses `Expanded` flex children with inline/outside count logic — works on 320 px wide screens.
+- Maps use fixed `height: 240` — no unbounded height constraints.
+- Graphs use `AspectRatio(2.6)` — height derived from width, fits all phone sizes.
+- `SingleChildScrollView` wraps the entire page — only vertical scrolling.
+
+#### Offline behavior
+
+- The polyline (`analyzedPoints` → `LatLng` list) is derived entirely from persisted GPS data. No network request is made for the route.
+- OSM tile fetch errors use `errorTileCallback: (tile, error, stackTrace) {}` — silently ignored.
+- Statistics and graphs remain fully functional with no internet connection.
+- `tripAnalyticsProvider` is synchronous in its analytics computation — no network calls.
+
+#### Performance
+
+- `tripAnalyticsProvider` is a Riverpod `NotifierProvider.family` — Riverpod caches the result per `tripId`. Analytics are not recomputed on widget rebuild.
+- No database queries inside `build()`.
+- No GPS calculations inside widgets — `analyzedPoints` are pre-computed by the analytics service.
+- `_toSpeedPoints` and `_toAltitudePoints` are static methods called once during widget build.
+
+#### Widget tests (21 total — 19 required + 2 bonus)
+
+All tests use `ProviderScope.overrides` with `_FakeAnalyticsNotifier` (extends `TripAnalyticsNotifier`) and `_FakeVehicleNotifier` (extends `VehicleListNotifier`) injecting fixed `TripAnalyticsState` / `VehicleState`. No SQLite, GPS, or network required.
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Trip header renders | ✅ |
+| 2 | Destination trip shows FROM/TO | ✅ |
+| 3 | Reckless trip shows Free Drive, no FROM/TO | ✅ |
+| 4 | Main statistics render | ✅ |
+| 5 | Loading state renders CircularProgressIndicator | ✅ |
+| 5b | Partial loading (trip ready, analytics loading) | ✅ bonus |
+| 6 | Analytics error state does not crash | ✅ |
+| 6b | Analytics error with trip shows header | ✅ bonus |
+| 7 | Speed graph renders with data | ✅ |
+| 8 | Speed graph handles missing speed | ✅ |
+| 9 | Altitude graph renders with data | ✅ |
+| 10 | Altitude graph handles missing altitude | ✅ |
+| 11 | Graph point interaction (tap) does not crash | ✅ |
+| 12 | Left/right turn counts render | ✅ |
+| 13 | Zero turns shows empty state, no percentages | ✅ |
+| 14 | U-turns counted separately in Details | ✅ |
+| 15 | Braking statistics render | ✅ |
+| 16 | Stop count renders from persisted trip | ✅ |
+| 17 | Deleted vehicle shows fallback | ✅ |
+| 18 | Long destination names do not overflow | ✅ |
+| 19 | Narrow phone (320 px) does not overflow | ✅ |
+
+#### Files created
+- `test/features/trips/trip_stats_ui_test.dart`
+
+#### Files modified
+- `lib/features/trips/presentation/trip_stats_screen.dart` (full replacement)
+
+#### Dependencies added
+None. Uses existing `flutter_map`, `latlong2`, `flutter_riverpod`, and internal widgets.
+
+#### Known limitations
+- The route map shows an OSM tile usage policy warning in test output (informational only — from `flutter_map` package, not a failure).
+- `trip.startName` is always null (reverse-geocoding at drive start not yet implemented) — the header falls back to coordinate labels.
+- Analytics are recomputed on each new `tripAnalyticsProvider(tripId)` creation (not cached to SQLite) — for typical drives (< 5 000 points) this is imperceptible.
+- Physical-device testing still required to verify map tile rendering, GPS polyline accuracy, and graph touch interaction feel on a real touch screen.
+- The turn split bar outside-bar count rendering (when bar is < 15% wide) is unit-tested but visual alignment on very narrow bars should be verified on device.
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **416 tests passed**:
+  - 395 pre-existing tests (Phases 5.1–6.4.1 + smoke test) ✅
+  - 21 new Phase 6.5 widget tests ✅
+- [x] TripStatsScreen uses `tripAnalyticsProvider(tripId)` as sole data source
+- [x] No SQLite access from widgets
+- [x] No GPS calculations in widgets
+- [x] No NaN/Infinity displayed
+- [x] Missing/null values shown as "—" not fake zeros
+- [x] Route polyline from `analyzedPoints` (not raw `TrackPointRecord` list)
+- [x] Speed graph from `analyzedPoints.bestSpeedKmh`
+- [x] Altitude graph from `analyzedPoints.altitude`
+- [x] TurnSplitBar wired to `turnAnalysis.leftTurns` / `.rightTurns`
+- [x] U-turns shown in Details section, not in split bar
+- [x] Braking/stop section wired to `brakingAnalysis` + `stopAnalysis`
+- [x] Vehicle lookup with deleted-vehicle fallback
+- [x] FROM/TO header for destination mode
+- [x] "Free Drive" header for reckless mode
+- [x] Elevation gain/loss from `altitudeAnalysis`
+- [x] Full loading/error states throughout
+- [x] Offline-safe map (tile errors silently ignored)
+- [x] No horizontal overflow on 320 px screens
+- [x] Long destination names wrap correctly
+- [x] All Phase 5 and Phase 6.1–6.4.1 tests continue passing
+- [x] No new packages added
 
 ---
 

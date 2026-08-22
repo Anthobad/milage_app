@@ -7,10 +7,14 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
+import '../../analytics/models/altitude_analysis.dart';
+import '../../analytics/models/analyzed_track_point.dart';
+import '../../analytics/models/braking_analysis.dart';
+import '../../analytics/models/stop_analysis.dart';
+import '../../analytics/models/turn_analysis.dart';
+import '../../analytics/providers/trip_analytics_provider.dart';
 import '../../cars/providers/vehicle_provider.dart';
-import '../models/track_point_record.dart';
 import '../models/trip.dart';
-import '../providers/trip_stats_provider.dart';
 import 'widgets/interactive_graph.dart';
 import 'widgets/turn_split_bar.dart';
 
@@ -18,22 +22,35 @@ import 'widgets/turn_split_bar.dart';
 // TripStatsScreen
 // ---------------------------------------------------------------------------
 
-/// Vertically-scrollable Trip Stats page.
+/// Vertically-scrollable Trip Stats page — Phase 6.5 integration.
+///
+/// Single data source: [tripAnalyticsProvider(tripId)] which exposes:
+///   • [TripAnalyticsState.trip]      — persisted [Trip] summary
+///   • [TripAnalyticsState.analytics] — full [DrivingAnalytics] result
 ///
 /// Sections (top → bottom):
-///   1. Header: date/time + destination or Free Drive indicator.
-///   2. Route map (flutter_map, fits polyline, pan/zoom).
-///   3. Core stats card (distance, duration, stops).
-///   4. Speed stats card.
-///   5. Altitude stats card.
-///   6. Speed graph (interactive, full width).
-///   7. Altitude graph (interactive, full width).
-///   8. Turn split bar (placeholder until turn detection is implemented).
+///   1. Trip header: date/time + FROM/TO (destination) or Free Drive (reckless).
+///   2. Route map (flutter_map, fits polyline, pan/zoom, offline-safe).
+///   3. Main stats card (distance, duration, stops, vehicle).
+///   4. Speed stats card (avg/min/max).
+///   5. Altitude stats card (min/max).
+///   6. Speed graph (interactive, from analyzedPoints).
+///   7. Altitude graph (interactive, from analyzedPoints).
+///   8. Additional stats (elevation gain/loss, trip mode, U-turns).
+///   9. Braking / stop statistics.
+///  10. Turn split bar (left/right counts from TurnAnalysis).
 ///
-/// Data strategy:
-///   - Summary stats (section 3-5) available immediately from [Trip] row.
-///   - GPS track (map, graphs) loads independently.  Loading placeholders
-///     are shown until ready.
+/// ## Data rule
+///
+/// All values come from [tripAnalyticsProvider].  No SQLite access, no GPS
+/// calculations inside widgets.  Persisted [Trip] values (distance, duration,
+/// speed/altitude extremes) take precedence over derived values where both
+/// exist.
+///
+/// ## Null safety
+///
+/// NaN and Infinity are never displayed.  Missing values show "—".
+/// Analytics sections show loading indicators while [isLoading] is true.
 class TripStatsScreen extends ConsumerWidget {
   const TripStatsScreen({super.key, required this.tripId});
 
@@ -41,12 +58,12 @@ class TripStatsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final stats = ref.watch(tripStatsProvider(tripId));
+    final state = ref.watch(tripAnalyticsProvider(tripId));
 
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
       appBar: _buildAppBar(context),
-      body: _buildBody(context, ref, stats),
+      body: _buildBody(context, ref, state),
     );
   }
 
@@ -72,15 +89,35 @@ class TripStatsScreen extends ConsumerWidget {
 
   // ── Body ──────────────────────────────────────────────────────────────────
 
-  Widget _buildBody(BuildContext context, WidgetRef ref, TripStatsState stats) {
-    if (stats.isLoadingTrip) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (stats.tripError != null) {
-      return _ErrorView(message: stats.tripError!);
+  Widget _buildBody(
+      BuildContext context, WidgetRef ref, TripAnalyticsState state) {
+    // Full-screen error when trip itself could not be loaded.
+    if (!state.isLoading && state.error != null && state.trip == null) {
+      return _ErrorView(message: state.error!);
     }
 
-    final trip = stats.trip!;
+    // Full-screen spinner only while the initial trip row is being loaded.
+    if (state.isLoading && state.trip == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // If trip is not yet available but we're loading, keep spinner.
+    final trip = state.trip;
+    if (trip == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final analytics = state.analytics;
+
+    // Derive graph data from analyzedPoints — no GPS math in the widget.
+    final analyzedPoints = analytics?.analyzedPoints ?? const [];
+    final speedPoints = _toSpeedPoints(analyzedPoints, trip.startTime);
+    final altitudePoints = _toAltitudePoints(analyzedPoints, trip.startTime);
+
+    // Route polyline from analyzedPoints.
+    final polylineLatLngs = analyzedPoints
+        .map((p) => LatLng(p.latitude, p.longitude))
+        .toList();
 
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -90,42 +127,45 @@ class TripStatsScreen extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ── 1. Header ────────────────────────────────────────────────
+          // ── 1. Header ────────────────────────────────────────────────────
           _TripHeader(trip: trip),
           const SizedBox(height: AppSpacing.md),
 
-          // ── 2. Route map ─────────────────────────────────────────────
+          // ── 2. Route map ─────────────────────────────────────────────────
           _RouteMapCard(
-            stats: stats,
-            trip: trip,
+            polylinePoints: polylineLatLngs,
+            startLatitude: trip.startLatitude,
+            startLongitude: trip.startLongitude,
+            isLoading: state.isLoading,
+            errorMessage:
+                (state.error != null && state.trip != null) ? state.error : null,
           ),
           const SizedBox(height: AppSpacing.md),
 
-          // ── 3. Core stats ─────────────────────────────────────────────
+          // ── 3. Main stats ─────────────────────────────────────────────────
           _CoreStatsCard(trip: trip, ref: ref),
           const SizedBox(height: AppSpacing.md),
 
-          // ── 4. Speed stats ────────────────────────────────────────────
+          // ── 4. Speed stats ────────────────────────────────────────────────
           if (trip.averageSpeedKmh != null) ...[
             _SpeedStatsCard(trip: trip),
             const SizedBox(height: AppSpacing.md),
           ],
 
-          // ── 5. Altitude stats ─────────────────────────────────────────
+          // ── 5. Altitude stats ─────────────────────────────────────────────
           if (trip.minimumAltitudeM != null) ...[
             _AltitudeStatsCard(trip: trip),
             const SizedBox(height: AppSpacing.md),
           ],
 
-          // ── 6. Speed graph ────────────────────────────────────────────
+          // ── 6. Speed graph ────────────────────────────────────────────────
           _GraphCard(
             title: 'Speed over time',
-            isLoading: stats.isLoadingTrack,
-            errorMessage: stats.trackError,
-            child: stats.trackPoints.isEmpty && !stats.isLoadingTrack
-                ? const _NoTrackLabel()
+            isLoading: state.isLoading,
+            child: speedPoints.isEmpty && !state.isLoading
+                ? const _NoDataLabel(label: 'No speed data recorded.')
                 : InteractiveGraph(
-                    dataPoints: _toSpeedPoints(stats.trackPoints),
+                    dataPoints: speedPoints,
                     title: 'Speed',
                     yUnit: 'km/h',
                     lineColor: AppColors.primaryLight,
@@ -133,15 +173,14 @@ class TripStatsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.md),
 
-          // ── 7. Altitude graph ─────────────────────────────────────────
+          // ── 7. Altitude graph ─────────────────────────────────────────────
           _GraphCard(
             title: 'Altitude over time',
-            isLoading: stats.isLoadingTrack,
-            errorMessage: stats.trackError,
-            child: stats.trackPoints.isEmpty && !stats.isLoadingTrack
-                ? const _NoTrackLabel()
+            isLoading: state.isLoading,
+            child: altitudePoints.isEmpty && !state.isLoading
+                ? const _NoDataLabel(label: 'No altitude data recorded.')
                 : InteractiveGraph(
-                    dataPoints: _toAltitudePoints(stats.trackPoints),
+                    dataPoints: altitudePoints,
                     title: 'Altitude',
                     yUnit: 'm',
                     lineColor: AppColors.success,
@@ -150,50 +189,89 @@ class TripStatsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: AppSpacing.md),
 
-          // ── 8. Turn split ─────────────────────────────────────────────
-          _TurnCard(trip: trip),
+          // ── 8. Additional analytics ───────────────────────────────────────
+          _AdditionalStatsCard(
+            trip: trip,
+            altitudeAnalysis: analytics?.altitudeAnalysis,
+            turnAnalysis: analytics?.turnAnalysis,
+            isLoading: state.isLoading,
+          ),
+          const SizedBox(height: AppSpacing.md),
 
-          // Extra space so the turn split bar clears the bottom nav bar
-          // when the user scrolls to the end.
-          const SizedBox(height: AppSpacing.bottomNavHeight + AppSpacing.xl + 32),
+          // ── 9. Braking / stop statistics ──────────────────────────────────
+          _BrakingStopCard(
+            brakingAnalysis: analytics?.brakingAnalysis,
+            stopAnalysis: analytics?.stopAnalysis,
+            stopCountFromTrip: trip.stops,
+            isLoading: state.isLoading,
+          ),
+          const SizedBox(height: AppSpacing.md),
+
+          // ── 10. Turn split bar ────────────────────────────────────────────
+          _TurnCard(
+            turnAnalysis: analytics?.turnAnalysis,
+            isLoading: state.isLoading,
+          ),
+
+          // Extra space above the bottom nav bar.
+          const SizedBox(
+              height: AppSpacing.bottomNavHeight + AppSpacing.xl + 32),
         ],
       ),
     );
   }
 
-  // ── Data helpers ──────────────────────────────────────────────────────────
+  // ── Data helpers — convert analyzedPoints to DataPoints ───────────────────
 
-  static List<DataPoint> _toSpeedPoints(List<TrackPointRecord> pts) {
-    if (pts.isEmpty) return [];
-    final origin = pts.first.timestamp;
-    return pts
-        .where((p) => p.speedKmh != null)
-        .map((p) => DataPoint(
-              timeSeconds:
-                  p.timestamp.difference(origin).inMilliseconds / 1000.0,
-              value: p.speedKmh!,
-            ))
-        .toList();
+  /// Convert analyzed points to speed DataPoints.
+  ///
+  /// Uses [AnalyzedTrackPoint.bestSpeedKmh] (raw GPS preferred, derived
+  /// fallback).  X-axis = elapsed seconds from [tripStart].
+  static List<DataPoint> _toSpeedPoints(
+      List<AnalyzedTrackPoint> pts, DateTime tripStart) {
+    if (pts.isEmpty) return const [];
+    final result = <DataPoint>[];
+    for (final p in pts) {
+      final speed = p.bestSpeedKmh;
+      if (speed == null || speed.isNaN || speed.isInfinite) continue;
+      final elapsed =
+          p.timestamp.difference(tripStart).inMilliseconds / 1000.0;
+      if (elapsed < 0) continue;
+      result.add(DataPoint(timeSeconds: elapsed, value: speed));
+    }
+    return result;
   }
 
-  static List<DataPoint> _toAltitudePoints(List<TrackPointRecord> pts) {
-    if (pts.isEmpty) return [];
-    final origin = pts.first.timestamp;
-    return pts
-        .where((p) => p.altitude != null)
-        .map((p) => DataPoint(
-              timeSeconds:
-                  p.timestamp.difference(origin).inMilliseconds / 1000.0,
-              value: p.altitude!,
-            ))
-        .toList();
+  /// Convert analyzed points to altitude DataPoints.
+  ///
+  /// Only points with non-null altitude are included.
+  /// X-axis = elapsed seconds from [tripStart].
+  static List<DataPoint> _toAltitudePoints(
+      List<AnalyzedTrackPoint> pts, DateTime tripStart) {
+    if (pts.isEmpty) return const [];
+    final result = <DataPoint>[];
+    for (final p in pts) {
+      final alt = p.altitude;
+      if (alt == null || alt.isNaN || alt.isInfinite) continue;
+      final elapsed =
+          p.timestamp.difference(tripStart).inMilliseconds / 1000.0;
+      if (elapsed < 0) continue;
+      result.add(DataPoint(timeSeconds: elapsed, value: alt));
+    }
+    return result;
   }
 }
 
 // ---------------------------------------------------------------------------
-// _TripHeader
+// _TripHeader — Section 1
 // ---------------------------------------------------------------------------
 
+/// Trip header showing date/time and destination or reckless mode info.
+///
+/// Destination mode: shows FROM (start) and TO (destination) labels.
+/// Reckless mode: shows "Free Drive — no destination".
+///
+/// No network requests are made here.  Uses only persisted [Trip] fields.
 class _TripHeader extends StatelessWidget {
   const _TripHeader({required this.trip});
   final Trip trip;
@@ -208,46 +286,58 @@ class _TripHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Date + time.
-        Text(
-          '$timeStr · $dateStr',
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: AppColors.textPrimaryDark,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.xs),
-
-        // Destination / mode.
-        if (trip.mode == TripMode.destination &&
-            trip.destinationName != null) ...[
-          Row(
-            children: [
-              const Icon(Icons.place_rounded, size: 14, color: AppColors.error),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  trip.destinationName!,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: AppColors.textSecondaryDark,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+        // Date + time row.
+        Row(
+          children: [
+            const Icon(Icons.calendar_today_rounded,
+                size: 14, color: AppColors.textSecondaryDark),
+            const SizedBox(width: AppSpacing.xs),
+            Text(
+              '$timeStr · $dateStr',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: AppColors.textPrimaryDark,
+                fontWeight: FontWeight.w600,
               ),
-            ],
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+
+        // Destination mode: FROM/TO.
+        if (trip.mode == TripMode.destination) ...[
+          _LocationRow(
+            label: 'FROM',
+            name: trip.startName ?? _coordLabel(trip.startLatitude, trip.startLongitude),
+            icon: Icons.radio_button_checked_rounded,
+            iconColor: AppColors.success,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          _LocationRow(
+            label: 'TO',
+            name: trip.destinationName ??
+                (trip.destinationLatitude != null
+                    ? _coordLabel(
+                        trip.destinationLatitude!, trip.destinationLongitude!)
+                    : 'Unknown destination'),
+            icon: Icons.place_rounded,
+            iconColor: AppColors.error,
           ),
         ] else ...[
+          // Reckless mode.
           Row(
             children: [
               const Icon(Icons.explore_rounded,
                   size: 14, color: AppColors.textSecondaryDark),
-              const SizedBox(width: 4),
-              Text(
-                'Free Drive — no destination',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: AppColors.textSecondaryDark,
-                  fontStyle: FontStyle.italic,
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  'Free Drive — no destination',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textSecondaryDark,
+                    fontStyle: FontStyle.italic,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -270,20 +360,88 @@ class _TripHeader extends StatelessWidget {
     final m = dt.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
+
+  static String _coordLabel(double lat, double lng) {
+    final latStr = lat.toStringAsFixed(4);
+    final lngStr = lng.toStringAsFixed(4);
+    return '$latStr, $lngStr';
+  }
+}
+
+/// A labeled location row used in destination mode header.
+class _LocationRow extends StatelessWidget {
+  const _LocationRow({
+    required this.label,
+    required this.name,
+    required this.icon,
+    required this.iconColor,
+  });
+
+  final String label;
+  final String name;
+  final IconData icon;
+  final Color iconColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: iconColor),
+        const SizedBox(width: AppSpacing.xs),
+        Text(
+          '$label  ',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: AppColors.textSecondaryDark,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            name,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.textPrimaryDark,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
-// _RouteMapCard
+// _RouteMapCard — Section 2
 // ---------------------------------------------------------------------------
 
-/// Map card showing the GPS route with flutter_map.
+/// Map card showing the GPS route polyline.
 ///
-/// The map is initially fitted around the entire polyline.
+/// Uses [polylinePoints] derived from [analytics.analyzedPoints].
+/// The map fits the full route automatically when opened.
 /// Pan and zoom are enabled.
+///
+/// ## Offline behavior
+///
+/// Tile errors are silently swallowed — [errorTileCallback] does nothing.
+/// The polyline is drawn from stored lat/lng coordinates and remains visible
+/// even when tiles fail to load.  Statistics are not dependent on tiles.
 class _RouteMapCard extends StatefulWidget {
-  const _RouteMapCard({required this.stats, required this.trip});
-  final TripStatsState stats;
-  final Trip trip;
+  const _RouteMapCard({
+    required this.polylinePoints,
+    required this.startLatitude,
+    required this.startLongitude,
+    required this.isLoading,
+    this.errorMessage,
+  });
+
+  final List<LatLng> polylinePoints;
+  final double startLatitude;
+  final double startLongitude;
+  final bool isLoading;
+  final String? errorMessage;
 
   @override
   State<_RouteMapCard> createState() => _RouteMapCardState();
@@ -302,40 +460,39 @@ class _RouteMapCardState extends State<_RouteMapCard> {
   @override
   void didUpdateWidget(_RouteMapCard old) {
     super.didUpdateWidget(old);
-    // Fit route once when the GPS track becomes available.
+    // Fit route once when the polyline first becomes available.
     if (!_fitted &&
-        widget.stats.trackPoints.isNotEmpty &&
-        old.stats.trackPoints.isEmpty) {
+        widget.polylinePoints.isNotEmpty &&
+        old.polylinePoints.isEmpty) {
       _fitted = true;
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitRoute());
     }
   }
 
   void _fitRoute() {
-    final pts = widget.stats.trackPoints.map((p) => p.latLng).toList();
-    if (pts.isEmpty) return;
-    _mapController.fitCamera(
-      CameraFit.coordinates(
-        coordinates: pts,
-        padding: const EdgeInsets.all(32),
-        minZoom: 10,
-        maxZoom: 17,
-      ),
-    );
+    if (widget.polylinePoints.isEmpty) return;
+    try {
+      _mapController.fitCamera(
+        CameraFit.coordinates(
+          coordinates: widget.polylinePoints,
+          padding: const EdgeInsets.all(32),
+          minZoom: 10,
+          maxZoom: 17,
+        ),
+      );
+    } catch (_) {
+      // Map may not be rendered yet; the fit will happen on next update.
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pts = widget.stats.trackPoints.map((p) => p.latLng).toList();
-
-    // Initial centre — use start lat/lng from Trip.
-    final startLatLng = LatLng(
-      widget.trip.startLatitude,
-      widget.trip.startLongitude,
-    );
-    final hasValidStart =
-        widget.trip.startLatitude != 0 || widget.trip.startLongitude != 0;
+    final pts = widget.polylinePoints;
+    final hasValidStart = widget.startLatitude != 0 || widget.startLongitude != 0;
+    final center = hasValidStart
+        ? LatLng(widget.startLatitude, widget.startLongitude)
+        : const LatLng(33.888, 35.495);
 
     return _Card(
       padding: EdgeInsets.zero,
@@ -348,9 +505,7 @@ class _RouteMapCardState extends State<_RouteMapCard> {
               FlutterMap(
                 mapController: _mapController,
                 options: MapOptions(
-                  initialCenter: hasValidStart
-                      ? startLatLng
-                      : const LatLng(33.888, 35.495),
+                  initialCenter: center,
                   initialZoom: 13.0,
                   minZoom: 3.0,
                   maxZoom: 18.0,
@@ -363,9 +518,8 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                     urlTemplate:
                         'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                     userAgentPackageName: 'com.triprank.app',
-                    errorTileCallback: (tile, error, stackTrace) {
-                      // Silently ignore tile errors — polyline still shows.
-                    },
+                    // Silently ignore tile errors — polyline still shows.
+                    errorTileCallback: (tile, error, stackTrace) {},
                   ),
                   if (pts.length >= 2)
                     PolylineLayer(
@@ -380,7 +534,6 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                   if (pts.isNotEmpty)
                     MarkerLayer(
                       markers: [
-                        // Start marker.
                         Marker(
                           point: pts.first,
                           width: 16,
@@ -394,7 +547,6 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                             ),
                           ),
                         ),
-                        // End marker.
                         Marker(
                           point: pts.last,
                           width: 16,
@@ -413,8 +565,8 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                 ],
               ),
 
-              // Loading overlay.
-              if (widget.stats.isLoadingTrack)
+              // Loading chip.
+              if (widget.isLoading)
                 Positioned(
                   bottom: AppSpacing.sm,
                   left: AppSpacing.sm,
@@ -422,10 +574,8 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
                     decoration: BoxDecoration(
-                      color:
-                          AppColors.backgroundDark.withValues(alpha: 0.85),
-                      borderRadius:
-                          BorderRadius.circular(AppSpacing.radiusMd),
+                      color: AppColors.backgroundDark.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -434,14 +584,12 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                           width: 12,
                           height: 12,
                           child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
-                              color: AppColors.primary),
+                              strokeWidth: 1.5, color: AppColors.primary),
                         ),
                         const SizedBox(width: AppSpacing.xs),
                         Text(
                           'Loading route…',
-                          style:
-                              theme.textTheme.labelSmall?.copyWith(
+                          style: theme.textTheme.labelSmall?.copyWith(
                             color: AppColors.textSecondaryDark,
                           ),
                         ),
@@ -450,8 +598,8 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                   ),
                 ),
 
-              // Error chip.
-              if (widget.stats.trackError != null)
+              // Analytics error chip (non-blocking — route/stats may still load).
+              if (widget.errorMessage != null)
                 Positioned(
                   bottom: AppSpacing.sm,
                   left: AppSpacing.sm,
@@ -460,11 +608,10 @@ class _RouteMapCardState extends State<_RouteMapCard> {
                         horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
                     decoration: BoxDecoration(
                       color: AppColors.error.withValues(alpha: 0.9),
-                      borderRadius:
-                          BorderRadius.circular(AppSpacing.radiusMd),
+                      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
                     ),
                     child: Text(
-                      'Track unavailable',
+                      'Analytics unavailable',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: Colors.white,
                       ),
@@ -480,9 +627,10 @@ class _RouteMapCardState extends State<_RouteMapCard> {
 }
 
 // ---------------------------------------------------------------------------
-// _CoreStatsCard
+// _CoreStatsCard — Section 3
 // ---------------------------------------------------------------------------
 
+/// Main statistics card: distance, duration, stops, vehicle.
 class _CoreStatsCard extends StatelessWidget {
   const _CoreStatsCard({required this.trip, required this.ref});
   final Trip trip;
@@ -490,13 +638,18 @@ class _CoreStatsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Vehicle name.
-    final vehicleState = ref.watch(vehicleProvider).value;
+    // Vehicle lookup — gracefully handles deleted vehicle.
+    final vehicleAsync = ref.watch(vehicleProvider);
+    final vehicleState = vehicleAsync.value;
     final vehicle = vehicleState?.vehicles
         .where((v) => v.id == trip.vehicleId)
         .firstOrNull;
-    final vehicleLabel =
-        vehicle != null ? '${vehicle.brand} ${vehicle.model}' : '—';
+
+    final vehicleLabel = trip.vehicleId == null
+        ? '—'
+        : vehicle != null
+            ? '${vehicle.brand} ${vehicle.model}'
+            : 'Vehicle unavailable';
 
     final stopsLabel =
         trip.stops != null ? '${trip.stops}' : '—';
@@ -505,7 +658,7 @@ class _CoreStatsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SectionTitle(title: 'Summary', icon: Icons.info_outline_rounded),
+          const _SectionTitle(title: 'Summary', icon: Icons.info_outline_rounded),
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
@@ -514,13 +667,13 @@ class _CoreStatsCard extends StatelessWidget {
                 label: 'Distance',
                 value: trip.distanceLabel,
               ),
-              _VDivider(),
+              const _VDivider(),
               _StatCell(
                 icon: Icons.timer_rounded,
                 label: 'Duration',
                 value: trip.durationLabel,
               ),
-              _VDivider(),
+              const _VDivider(),
               _StatCell(
                 icon: Icons.pause_circle_outline_rounded,
                 label: 'Stops',
@@ -529,7 +682,7 @@ class _CoreStatsCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
-          const Divider(height: 1),
+          const Divider(height: 1, color: AppColors.dividerDark),
           const SizedBox(height: AppSpacing.sm),
           // Vehicle row.
           Row(
@@ -541,8 +694,15 @@ class _CoreStatsCard extends StatelessWidget {
                 child: Text(
                   vehicleLabel,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textPrimaryDark,
+                        color: trip.vehicleId != null && vehicle == null
+                            ? AppColors.textSecondaryDark
+                            : AppColors.textPrimaryDark,
+                        fontStyle: trip.vehicleId != null && vehicle == null
+                            ? FontStyle.italic
+                            : FontStyle.normal,
                       ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -554,15 +714,17 @@ class _CoreStatsCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _SpeedStatsCard
+// _SpeedStatsCard — Section 4
 // ---------------------------------------------------------------------------
 
 class _SpeedStatsCard extends StatelessWidget {
   const _SpeedStatsCard({required this.trip});
   final Trip trip;
 
-  String _fmt(double? v) =>
-      v != null ? '${v.toStringAsFixed(0)} km/h' : '—';
+  String _fmtSpeed(double? v) =>
+      (v != null && !v.isNaN && !v.isInfinite)
+          ? '${v.toStringAsFixed(0)} km/h'
+          : '—';
 
   @override
   Widget build(BuildContext context) {
@@ -570,26 +732,26 @@ class _SpeedStatsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SectionTitle(title: 'Speed', icon: Icons.speed_rounded),
+          const _SectionTitle(title: 'Speed', icon: Icons.speed_rounded),
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               _StatCell(
                 icon: Icons.trending_flat_rounded,
                 label: 'Average',
-                value: _fmt(trip.averageSpeedKmh),
+                value: _fmtSpeed(trip.averageSpeedKmh),
               ),
-              _VDivider(),
+              const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_downward_rounded,
                 label: 'Minimum',
-                value: _fmt(trip.minimumSpeedKmh),
+                value: _fmtSpeed(trip.minimumSpeedKmh),
               ),
-              _VDivider(),
+              const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_upward_rounded,
                 label: 'Maximum',
-                value: _fmt(trip.maximumSpeedKmh),
+                value: _fmtSpeed(trip.maximumSpeedKmh),
               ),
             ],
           ),
@@ -600,15 +762,17 @@ class _SpeedStatsCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _AltitudeStatsCard
+// _AltitudeStatsCard — Section 5
 // ---------------------------------------------------------------------------
 
 class _AltitudeStatsCard extends StatelessWidget {
   const _AltitudeStatsCard({required this.trip});
   final Trip trip;
 
-  String _fmt(double? v) =>
-      v != null ? '${v.toStringAsFixed(0)} m' : '—';
+  String _fmtAlt(double? v) =>
+      (v != null && !v.isNaN && !v.isInfinite)
+          ? '${v.toStringAsFixed(0)} m'
+          : '—';
 
   @override
   Widget build(BuildContext context) {
@@ -616,20 +780,20 @@ class _AltitudeStatsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SectionTitle(title: 'Altitude', icon: Icons.terrain_rounded),
+          const _SectionTitle(title: 'Altitude', icon: Icons.terrain_rounded),
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               _StatCell(
                 icon: Icons.arrow_downward_rounded,
                 label: 'Minimum',
-                value: _fmt(trip.minimumAltitudeM),
+                value: _fmtAlt(trip.minimumAltitudeM),
               ),
-              _VDivider(),
+              const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_upward_rounded,
                 label: 'Maximum',
-                value: _fmt(trip.maximumAltitudeM),
+                value: _fmtAlt(trip.maximumAltitudeM),
               ),
             ],
           ),
@@ -640,20 +804,18 @@ class _AltitudeStatsCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _GraphCard
+// _GraphCard — wrapper for Sections 6 & 7
 // ---------------------------------------------------------------------------
 
 class _GraphCard extends StatelessWidget {
   const _GraphCard({
     required this.title,
     required this.isLoading,
-    this.errorMessage,
     required this.child,
   });
 
   final String title;
   final bool isLoading;
-  final String? errorMessage;
   final Widget child;
 
   @override
@@ -667,6 +829,7 @@ class _GraphCard extends StatelessWidget {
               title,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimaryDark,
                   ),
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -675,24 +838,15 @@ class _GraphCard extends StatelessWidget {
                 SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.primary),
                 ),
                 SizedBox(width: AppSpacing.sm),
-                Text('Loading…'),
+                Text('Loading…',
+                    style: TextStyle(color: AppColors.textSecondaryDark)),
               ],
             ),
           ],
-        ),
-      );
-    }
-    if (errorMessage != null) {
-      return _Card(
-        child: Text(
-          errorMessage!,
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: AppColors.error),
         ),
       );
     }
@@ -701,26 +855,120 @@ class _GraphCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _TurnCard
+// _AdditionalStatsCard — Section 8
 // ---------------------------------------------------------------------------
 
-class _TurnCard extends StatelessWidget {
-  const _TurnCard({required this.trip});
+/// Additional analytics section: elevation gain/loss, trip mode, U-turns.
+///
+/// Only displays rows that have valid (non-null) data.
+class _AdditionalStatsCard extends StatelessWidget {
+  const _AdditionalStatsCard({
+    required this.trip,
+    required this.altitudeAnalysis,
+    required this.turnAnalysis,
+    required this.isLoading,
+  });
+
   final Trip trip;
+  final AltitudeAnalysis? altitudeAnalysis;
+  final TurnAnalysis? turnAnalysis;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final rows = <Widget>[];
+
+    // Trip mode.
+    rows.add(_InfoRow(
+      icon: Icons.route_rounded,
+      label: 'Trip mode',
+      value: trip.mode == TripMode.destination ? 'Destination' : 'Free Drive',
+    ));
+
+    // Elevation gain.
+    final gain = altitudeAnalysis?.totalElevationGainM;
+    if (gain != null && !gain.isNaN && !gain.isInfinite) {
+      rows.add(_InfoRow(
+        icon: Icons.trending_up_rounded,
+        label: 'Elevation gain',
+        value: '${gain.toStringAsFixed(0)} m',
+        valueColor: AppColors.success,
+      ));
+    }
+
+    // Elevation loss.
+    final loss = altitudeAnalysis?.totalElevationLossM;
+    if (loss != null && !loss.isNaN && !loss.isInfinite) {
+      rows.add(_InfoRow(
+        icon: Icons.trending_down_rounded,
+        label: 'Elevation loss',
+        value: '${loss.toStringAsFixed(0)} m',
+        valueColor: AppColors.warning,
+      ));
+    }
+
+    // U-turns (if any).
+    final uTurns = turnAnalysis?.uTurns;
+    if (uTurns != null && uTurns > 0) {
+      rows.add(_InfoRow(
+        icon: Icons.u_turn_right_rounded,
+        label: 'U-turns',
+        value: '$uTurns',
+      ));
+    }
+
+    if (isLoading && altitudeAnalysis == null) {
+      // Show a compact loading state — only for the analytics-derived rows.
+      return _Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SectionTitle(
+              title: 'Details',
+              icon: Icons.analytics_outlined,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            // Mode row is always available.
+            _InfoRow(
+              icon: Icons.route_rounded,
+              label: 'Trip mode',
+              value: trip.mode == TripMode.destination
+                  ? 'Destination'
+                  : 'Free Drive',
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: AppColors.primary)),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  'Computing elevation…',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondaryDark,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _SectionTitle(
-            title: 'Left / Right Turns',
-            icon: Icons.compare_arrows_rounded,
+          const _SectionTitle(
+            title: 'Details',
+            icon: Icons.analytics_outlined,
           ),
-          const SizedBox(height: AppSpacing.md),
-          // Turn detection not yet implemented — pass null.
-          const TurnSplitBar(leftTurns: null, rightTurns: null),
+          const SizedBox(height: AppSpacing.sm),
+          ...rows.expand((row) => [row, const SizedBox(height: AppSpacing.xs)]),
         ],
       ),
     );
@@ -728,18 +976,171 @@ class _TurnCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _NoTrackLabel
+// _BrakingStopCard — Section 9
 // ---------------------------------------------------------------------------
 
-class _NoTrackLabel extends StatelessWidget {
-  const _NoTrackLabel();
+/// Compact braking and stop statistics section.
+///
+/// Uses [brakingAnalysis] for hard braking and sudden stop counts,
+/// and [stopCountFromTrip] (persisted) as the authoritative stop count.
+class _BrakingStopCard extends StatelessWidget {
+  const _BrakingStopCard({
+    required this.brakingAnalysis,
+    required this.stopAnalysis,
+    required this.stopCountFromTrip,
+    required this.isLoading,
+  });
+
+  final BrakingAnalysis? brakingAnalysis;
+  final StopAnalysis? stopAnalysis;
+  final int? stopCountFromTrip;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading && brakingAnalysis == null) {
+      return _Card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SectionTitle(
+              title: 'Safety events',
+              icon: Icons.warning_amber_rounded,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            const Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: AppColors.primary),
+                ),
+                SizedBox(width: AppSpacing.sm),
+                Text('Analyzing…',
+                    style: TextStyle(
+                        color: AppColors.textSecondaryDark, fontSize: 13)),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    final hardBraking = brakingAnalysis?.hardBrakingCount;
+    final suddenStops = brakingAnalysis?.suddenStopCount;
+    // Prefer persisted stop count from Trip; fall back to computed value.
+    final stops = stopCountFromTrip ?? stopAnalysis?.stopCount;
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: 'Safety events',
+            icon: Icons.warning_amber_rounded,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              _StatCell(
+                icon: Icons.speed_rounded,
+                label: 'Hard braking',
+                value: hardBraking != null ? '$hardBraking' : '—',
+                valueColor: hardBraking != null && hardBraking > 0
+                    ? AppColors.warning
+                    : null,
+              ),
+              const _VDivider(),
+              _StatCell(
+                icon: Icons.front_hand_rounded,
+                label: 'Sudden stops',
+                value: suddenStops != null ? '$suddenStops' : '—',
+                valueColor: suddenStops != null && suddenStops > 0
+                    ? AppColors.error
+                    : null,
+              ),
+              const _VDivider(),
+              _StatCell(
+                icon: Icons.pause_circle_filled_rounded,
+                label: 'Stops',
+                value: stops != null ? '$stops' : '—',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _TurnCard — Section 10
+// ---------------------------------------------------------------------------
+
+/// Turn statistics section with left/right split bar and U-turn label.
+class _TurnCard extends StatelessWidget {
+  const _TurnCard({
+    required this.turnAnalysis,
+    required this.isLoading,
+  });
+
+  final TurnAnalysis? turnAnalysis;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionTitle(
+            title: 'Left / Right Turns',
+            icon: Icons.compare_arrows_rounded,
+          ),
+          const SizedBox(height: AppSpacing.md),
+
+          if (isLoading && turnAnalysis == null)
+            const Row(
+              children: [
+                SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: AppColors.primary)),
+                SizedBox(width: AppSpacing.sm),
+                Text('Analyzing turns…',
+                    style: TextStyle(
+                        color: AppColors.textSecondaryDark, fontSize: 13)),
+              ],
+            )
+          else
+            TurnSplitBar(
+              // Pass real counts — the widget handles null (not available)
+              // and zero (no turns recorded) states internally.
+              leftTurns: turnAnalysis?.leftTurns,
+              rightTurns: turnAnalysis?.rightTurns,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _NoDataLabel
+// ---------------------------------------------------------------------------
+
+class _NoDataLabel extends StatelessWidget {
+  const _NoDataLabel({required this.label});
+  final String label;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: Text(
-        'No GPS data recorded for this trip.',
+        label,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context)
                   .colorScheme
@@ -752,7 +1153,7 @@ class _NoTrackLabel extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _ErrorView
+// _ErrorView — full-screen error
 // ---------------------------------------------------------------------------
 
 class _ErrorView extends StatelessWidget {
@@ -772,10 +1173,56 @@ class _ErrorView extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
             Text(message,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyLarge),
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      color: AppColors.textPrimaryDark,
+                    )),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _InfoRow — compact labeled value row
+// ---------------------------------------------------------------------------
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppColors.textSecondaryDark),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AppColors.textSecondaryDark,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: valueColor ?? AppColors.textPrimaryDark,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -792,6 +1239,7 @@ class _Card extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: double.infinity,
       decoration: BoxDecoration(
         color: AppColors.surfaceDark,
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
@@ -807,10 +1255,13 @@ class _StatCell extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.valueColor,
   });
+
   final IconData icon;
   final String label;
   final String value;
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
@@ -825,9 +1276,11 @@ class _StatCell extends StatelessWidget {
             value,
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w700,
-              color: AppColors.textPrimaryDark,
+              color: valueColor ?? AppColors.textPrimaryDark,
             ),
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           Text(
             label,
@@ -835,6 +1288,8 @@ class _StatCell extends StatelessWidget {
               color: AppColors.textSecondaryDark,
             ),
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -843,9 +1298,11 @@ class _StatCell extends StatelessWidget {
 }
 
 class _VDivider extends StatelessWidget {
+  const _VDivider();
+
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return const SizedBox(
       height: 40,
       child: VerticalDivider(
         width: 1,
@@ -866,12 +1323,16 @@ class _SectionTitle extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: AppColors.primary),
         const SizedBox(width: AppSpacing.xs),
-        Text(
-          title,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimaryDark,
-              ),
+        Flexible(
+          child: Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimaryDark,
+                ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ],
     );
