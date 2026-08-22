@@ -11,21 +11,15 @@ import '../services/location_service.dart';
 // State
 // ---------------------------------------------------------------------------
 
-/// Map theme setting — independent from app theme per spec.
-enum MapTheme {
-  /// OpenStreetMap standard tiles (light).
-  standard,
-
-  /// Future: dark/custom tile server.
-  dark,
-}
-
 /// Immutable state for the map feature.
+///
+/// Phase 7.3: the map tile theme is no longer stored here.
+/// [mapThemeProvider] is now the single authoritative source for map
+/// appearance.  [MapState] manages only location / camera concerns.
 class MapState {
   const MapState({
     this.currentLocation,
     this.locationStatus = LocationStatus.permissionDenied,
-    this.mapTheme = MapTheme.standard,
     this.isLoadingLocation = false,
   });
 
@@ -35,9 +29,6 @@ class MapState {
   /// Last known location permission / service status.
   final LocationStatus locationStatus;
 
-  /// Map tile theme — independent from app theme.
-  final MapTheme mapTheme;
-
   /// True while fetching initial location.
   final bool isLoadingLocation;
 
@@ -46,13 +37,11 @@ class MapState {
   MapState copyWith({
     LatLng? currentLocation,
     LocationStatus? locationStatus,
-    MapTheme? mapTheme,
     bool? isLoadingLocation,
   }) {
     return MapState(
       currentLocation: currentLocation ?? this.currentLocation,
       locationStatus: locationStatus ?? this.locationStatus,
-      mapTheme: mapTheme ?? this.mapTheme,
       isLoadingLocation: isLoadingLocation ?? this.isLoadingLocation,
     );
   }
@@ -243,11 +232,6 @@ class MapNotifier extends Notifier<MapState> {
     } catch (_) {
       // MapController not yet attached to a live map — safe to ignore.
     }
-  }
-
-  /// Switch map tile theme — independent from app theme.
-  void setMapTheme(MapTheme theme) {
-    state = state.copyWith(mapTheme: theme);
   }
 
   // ---------------------------------------------------------------------------

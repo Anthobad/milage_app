@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 7.2 complete_
+_Last updated: 2026-08-22 — Phase 7.3 complete_
 
 ---
 
@@ -2313,7 +2313,7 @@ None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/s
 
 ## Phase 7 — Profile & Settings
 
-**Status: 🔄 In Progress** _(Phase 7.1, 7.2 complete)_
+**Status: 🔄 In Progress** _(Phase 7.1, 7.2, 7.3 complete)_
 
 ---
 
@@ -2557,6 +2557,168 @@ Provider / model unit tests (5):
 
 #### Deferred work
 - Map Appearance settings (Phase 7.3)
+- Units settings (future Phase 7 task)
+- Permissions settings (future Phase 7 task)
+- About TripRank content (future Phase 7 task)
+
+---
+
+### Phase 7.3 — Map Appearance Settings
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+Implemented the dedicated Map Appearance settings page, opened from Profile → Map Appearance. The page controls only the appearance/theme of the flutter_map tile layer and has no effect on the TripRank application UI theme.
+
+- **`lib/features/map/providers/map_theme_provider.dart`** _(new)_ — `MapThemeMode` enum (`dark`, `light`, `system`). `MapThemeNotifier` (`AsyncNotifier<MapThemeMode>`). `build()` reads persisted value from SharedPreferences (key: `'map_theme_mode'`) on cold start. `setMapTheme(MapThemeMode)` updates state optimistically then persists. Default (absent key): `MapThemeMode.dark`. `resolveMapIsDark(mode, systemBrightness)` helper function that resolves `system` to concrete dark/light based on `MediaQuery.platformBrightness`. Exported constant `kMapThemeModePreferenceKey = 'map_theme_mode'` (intentionally different from `kThemeModePreferenceKey = 'theme_mode'`).
+- **`lib/features/map/utils/map_style_constants.dart`** _(new)_ — `kMapTileUrlLight` (standard OSM tiles), `kMapTileUrlDark` (CartoDB Dark Matter tiles — free, no API key), `kMapTileUserAgent`. These are local configuration values — no network request needed to determine which style to apply; tile fetch continues to require internet as before.
+- **`lib/features/profile/presentation/map_appearance_screen.dart`** _(new)_ — `MapAppearanceScreen` `ConsumerWidget`. Three options: Dark (🌙), Light (☀️), System (⚙️). Active option shows blue checkmark. Same rounded-card style as `AppearanceScreen` (Phase 7.2). Reads `mapThemeProvider` only — never reads or writes `themeProvider`.
+- **`lib/features/map/presentation/map_screen.dart`** _(modified)_ — `_LiveMapState.build()` now reads `mapThemeProvider` as the authoritative source for tile URL. `resolveMapIsDark()` used to handle System mode. `MapState.mapTheme` removed — map theme no longer stored in `MapState`.
+- **`lib/features/map/providers/map_provider.dart`** _(modified)_ — `MapState` field `mapTheme` removed; `mapThemeProvider` is now the single authoritative source for map appearance. `MapState` manages only location/camera concerns.
+- **`lib/app/router.dart`** _(modified)_ — Route `'settings/map-appearance'` inside the Profile branch now builds `MapAppearanceScreen()`. `AppRoutes.profileMapAppearance = '/profile/settings/map-appearance'` constant added.
+- **`test/features/profile/map_appearance_settings_test.dart`** _(new)_ — 34 tests (18 widget + 12 unit tests) covering all 19 required scenarios.
+
+#### Map appearance options
+
+| Option | Behavior |
+|---|---|
+| Dark (default) | CartoDB Dark Matter tile layer |
+| Light | Standard OpenStreetMap tile layer |
+| System | Follows Android system brightness; TripRank app ThemeMode remains independent |
+
+#### Default behavior
+
+`MapThemeMode.dark` is the default when no preference is saved (key absent from SharedPreferences).
+
+#### Persistence mechanism
+
+- Package: `shared_preferences ^2.5.5` (existing project dependency)
+- Key: `'map_theme_mode'`
+- Stored values: `'dark'` | `'light'` | `'system'`
+- Default (absent key): `MapThemeMode.dark`
+- Survives: widget rebuilds, navigation, app close/reopen, phone restart
+- NOT stored in the SQLite trip/vehicle tables — correct for an app preference
+
+#### Separation from App Appearance
+
+The two theme settings are fully independent:
+
+| Setting | Provider | Pref key | Controls |
+|---|---|---|---|
+| App Appearance | `themeProvider` (`AsyncNotifier<ThemeMode>`) | `'theme_mode'` | TripRank UI |
+| Map Appearance | `mapThemeProvider` (`AsyncNotifier<MapThemeMode>`) | `'map_theme_mode'` | Map tiles only |
+
+`MapThemeNotifier` never reads or writes `themeProvider`. `ThemeModeNotifier` never reads or writes `mapThemeProvider`. Tests 13 and 14 verify this separation explicitly.
+
+#### Map styling implementation
+
+- Dark: `https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png` (CartoDB Dark Matter)
+- Light: `https://tile.openstreetmap.org/{z}/{x}/{y}.png` (standard OSM)
+- System: resolves to either dark or light at render time via `resolveMapIsDark(mode, MediaQuery.platformBrightness)`
+- Tile selection is local/offline — no network request determines which URL to use
+- Tile fetches continue to require internet (as they always have)
+
+#### Map receives updated tile URL
+
+The tile URL is resolved in `_LiveMapState.build()` by watching `mapThemeProvider`. When the user changes the map theme setting, Riverpod causes `_LiveMapState` to rebuild with the new tile URL. If the map is currently visible it updates immediately; if not mounted, the new URL is applied on next creation.
+
+#### Navigation
+
+```
+Profile page
+    └── Map Appearance row → context.push(AppRoutes.profileMapAppearance)
+            ↓
+        MapAppearanceScreen  (/profile/settings/map-appearance)
+            └── AppBar back button → returns to Profile
+```
+
+No intermediate Settings hub. No bottom navigation modification.
+
+#### Architecture
+
+```
+MapAppearanceScreen (UI)
+      ↓
+mapThemeProvider.notifier.setMapTheme(MapThemeMode)
+      ↓
+MapThemeNotifier (AsyncNotifier<MapThemeMode>)
+      ├── build() → SharedPreferences.getString('map_theme_mode') → MapThemeMode
+      └── setMapTheme() → state = AsyncData(mode) → prefs.setString(...)
+
+_LiveMapState (map_screen.dart)
+      ↓
+ref.watch(mapThemeProvider).value ?? MapThemeMode.dark
+      ↓
+resolveMapIsDark(mode, systemBrightness)
+      ↓
+isDark ? kMapTileUrlDark : kMapTileUrlLight
+      ↓
+TileLayer(urlTemplate: tileUrl, ...)
+```
+
+Single authoritative source for map appearance — no duplicate state.
+
+#### Files created
+- `lib/features/map/providers/map_theme_provider.dart`
+- `lib/features/map/utils/map_style_constants.dart`
+- `lib/features/profile/presentation/map_appearance_screen.dart`
+- `test/features/profile/map_appearance_settings_test.dart`
+
+#### Files modified
+- `lib/features/map/presentation/map_screen.dart` — reads `mapThemeProvider` for tile URL; `mapTheme` field removed from local state
+- `lib/features/map/providers/map_provider.dart` — `MapState.mapTheme` field removed; map theme moved to dedicated provider
+- `lib/app/router.dart` — added `profileMapAppearance` route and constant
+- `test/features/profile/map_appearance_settings_test.dart` — fixed 2 dead-code warnings (tests 15/16: `const isDark` → `resolveMapIsDark()`)
+- `test/features/profile/appearance_settings_test.dart` — fixed test 13: `await container.read(mapThemeProvider.future)` before reading `.value` to ensure async notifier resolved
+
+#### Dependencies added
+None. Uses existing `shared_preferences ^2.5.5` and `flutter_riverpod ^3.4.2`.
+
+#### Tests performed (34 total)
+
+Widget tests (18):
+1. Map Appearance page renders without crashing
+2. Dark, Light, and System options are visible
+3. Dark is the default when no preference exists
+4. Selecting Dark updates map theme state
+5. Selecting Light updates map theme state
+6. Selecting System updates map theme state
+7a–7c. Checkmark shown for each initial preference (Dark/Light/System)
+8. Only one option is selected at a time
+9. Map preference persists after provider/state recreation
+10a–10c. Persisted preference restored on cold start (Dark/Light/System)
+11. Profile → Map Appearance navigation works
+12. Back navigation returns to Profile
+13. Changing Map Appearance does NOT change app ThemeMode
+14. Changing App Appearance does NOT change Map Appearance
+18. Map Appearance page does not affect MapState (location/routing)
+
+Unit tests (16):
+- Default map theme is dark when no preference is saved
+- setMapTheme(light) changes state to light
+- setMapTheme(system) changes state to system
+- kMapThemeModePreferenceKey is 'map_theme_mode'
+- kMapThemeModePreferenceKey differs from kThemeModePreferenceKey
+- dark is the fallback when async value is null/loading
+- resolveMapIsDark: dark mode always returns true
+- resolveMapIsDark: light mode always returns false
+- resolveMapIsDark: system follows platform brightness
+- Tests 15, 16, 17: tile URL correctness and System mode resolution
+- tile URL z/x/y placeholder checks
+
+#### Verification results
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found**
+- `flutter test` → **539 tests passed** (505 pre-existing + 34 new Phase 7.3 tests)
+- No regressions introduced
+
+#### Known limitations
+- `MapThemeMode.system` re-evaluates system brightness on each `_LiveMapState` rebuild. If the system theme changes while the app is running, the next map rebuild will pick it up automatically (governed by `MediaQuery.platformBrightness` propagation). There is no explicit system brightness change listener beyond what Flutter provides via `MediaQuery`.
+- CartoDB Dark Matter tiles require an internet connection to fetch (as do all tile providers). Tile style selection itself is local and offline-safe.
+
+#### Deferred work
 - Units settings (future Phase 7 task)
 - Permissions settings (future Phase 7 task)
 - About TripRank content (future Phase 7 task)

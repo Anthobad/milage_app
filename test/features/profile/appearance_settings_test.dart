@@ -34,6 +34,7 @@ import 'package:go_router/go_router.dart';
 import 'package:triprank_project/app/theme/app_theme.dart';
 import 'package:triprank_project/app/theme/theme_provider.dart';
 import 'package:triprank_project/features/map/providers/map_provider.dart';
+import 'package:triprank_project/features/map/providers/map_theme_provider.dart';
 import 'package:triprank_project/features/profile/presentation/appearance_screen.dart';
 import 'package:triprank_project/features/profile/presentation/profile_screen.dart';
 import 'package:triprank_project/features/profile/providers/profile_driving_summary_provider.dart';
@@ -61,17 +62,30 @@ class _FakeThemeNotifier extends ThemeModeNotifier {
 }
 
 // ---------------------------------------------------------------------------
-// Fake MapNotifier — records whether mapTheme was mutated
+// Fake MapNotifier — used to verify map theme is NOT mutated by app theme
 // ---------------------------------------------------------------------------
 
-/// Fake MapNotifier that starts in a known state and tracks mutation.
+/// Fake MapNotifier that starts in a known state.
+/// No location service initialisation in tests.
 class _FakeMapNotifier extends MapNotifier {
-  bool mapThemeMutated = false;
-
   @override
   MapState build() {
     // Skip location service initialisation in tests.
-    return const MapState(mapTheme: MapTheme.standard);
+    return const MapState();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fake MapThemeNotifier — starts with dark, does NOT call SharedPreferences
+// ---------------------------------------------------------------------------
+
+class _FakeMapThemeNotifier extends MapThemeNotifier {
+  @override
+  Future<MapThemeMode> build() async => MapThemeMode.dark;
+
+  @override
+  Future<void> setMapTheme(MapThemeMode mode) async {
+    state = AsyncData(mode);
   }
 }
 
@@ -114,6 +128,7 @@ Widget _buildAppearanceScreen({
     overrides: [
       themeProvider.overrideWith(() => _FakeThemeNotifier(initialTheme)),
       mapProvider.overrideWith(() => fakeMap),
+      mapThemeProvider.overrideWith(() => _FakeMapThemeNotifier()),
     ],
     child: Consumer(
       builder: (context, ref, _) {
@@ -176,6 +191,7 @@ Widget _buildProfileToAppearanceRouter({
     overrides: [
       themeProvider.overrideWith(() => _FakeThemeNotifier(initialTheme)),
       mapProvider.overrideWith(() => _FakeMapNotifier()),
+      mapThemeProvider.overrideWith(() => _FakeMapThemeNotifier()),
       profileDrivingSummaryProvider.overrideWith(
         () => _FakeSummaryNotifier(),
       ),
@@ -455,7 +471,7 @@ void main() {
     testWidgets(
         '13. Changing app appearance does NOT modify the map theme setting',
         (tester) async {
-      final fakeMap = _FakeMapNotifier();
+      final fakeMapTheme = _FakeMapThemeNotifier();
 
       await tester.pumpWidget(
         ProviderScope(
@@ -463,7 +479,8 @@ void main() {
             themeProvider.overrideWith(
               () => _FakeThemeNotifier(ThemeMode.dark),
             ),
-            mapProvider.overrideWith(() => fakeMap),
+            mapProvider.overrideWith(() => _FakeMapNotifier()),
+            mapThemeProvider.overrideWith(() => fakeMapTheme),
           ],
           child: Consumer(
             builder: (context, ref, _) {
@@ -485,7 +502,10 @@ void main() {
       final container = ProviderScope.containerOf(
         tester.element(find.byType(AppearanceScreen)),
       );
-      final mapBefore = container.read(mapProvider).mapTheme;
+
+      // Await the async notifier so .value is non-null before we record it.
+      await container.read(mapThemeProvider.future);
+      final mapBefore = container.read(mapThemeProvider).value;
 
       // Switch app theme to Light.
       await tester.tap(find.byKey(const Key('theme_option_light')));
@@ -495,7 +515,7 @@ void main() {
       expect(find.byKey(const Key('checkmark_Light')), findsOneWidget);
 
       // Map theme must be unchanged.
-      final mapAfter = container.read(mapProvider).mapTheme;
+      final mapAfter = container.read(mapThemeProvider).value;
       expect(
         mapAfter,
         equals(mapBefore),
@@ -506,7 +526,7 @@ void main() {
       await tester.tap(find.byKey(const Key('theme_option_system')));
       await tester.pump();
 
-      final mapAfterSystem = container.read(mapProvider).mapTheme;
+      final mapAfterSystem = container.read(mapThemeProvider).value;
       expect(
         mapAfterSystem,
         equals(mapBefore),

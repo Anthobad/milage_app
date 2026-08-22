@@ -6,6 +6,7 @@ import '../features/cars/presentation/cars_screen.dart';
 import '../features/map/presentation/map_screen.dart';
 import '../features/profile/presentation/about_screen.dart';
 import '../features/profile/presentation/appearance_screen.dart';
+import '../features/profile/presentation/map_appearance_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
 import '../features/profile/presentation/settings_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
@@ -136,8 +137,7 @@ final GoRouter appRouter = GoRouter(
                 ),
                 GoRoute(
                   path: 'settings/map-appearance',
-                  builder: (context, state) =>
-                      const SettingPlaceholderScreen(title: 'Map Appearance'),
+                  builder: (context, state) => const MapAppearanceScreen(),
                 ),
                 GoRoute(
                   path: 'settings/units',

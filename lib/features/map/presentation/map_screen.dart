@@ -11,9 +11,11 @@ import '../models/route_result.dart';
 import '../providers/destination_provider.dart';
 import '../providers/drive_provider.dart';
 import '../providers/map_provider.dart';
+import '../providers/map_theme_provider.dart';
 import '../providers/route_provider.dart';
 import '../services/geocoding_service.dart';
 import '../services/location_service.dart';
+import '../utils/map_style_constants.dart';
 import 'dialogs/end_reckless_drive_dialog.dart';
 import 'widgets/map_info_bar.dart';
 import 'widgets/map_top_bar.dart';
@@ -189,10 +191,6 @@ class _LiveMap extends ConsumerStatefulWidget {
 }
 
 class _LiveMapState extends ConsumerState<_LiveMap> {
-  // OSM tile URL template — standard tiles, no API key needed.
-  static const String _osmTileUrl =
-      'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-
   // Track the last route we fitted the camera for so we don't re-fit on
   // every rebuild (e.g. on orientation changes or parent rebuilds).
   RouteResult? _lastFittedRoute;
@@ -204,6 +202,16 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
     final route = ref.watch(routeProvider);
     final drive = ref.watch(driveProvider);
     final mapNotifier = ref.read(mapProvider.notifier);
+
+    // ── Resolve the tile URL from mapThemeProvider ──────────────────────────
+    //
+    // mapThemeProvider is the single authoritative source for map appearance.
+    // We default to dark during async load (matches MapThemeMode.dark default).
+    final mapThemeMode =
+        ref.watch(mapThemeProvider).value ?? MapThemeMode.dark;
+    final systemBrightness = MediaQuery.of(context).platformBrightness;
+    final isDark = resolveMapIsDark(mapThemeMode, systemBrightness);
+    final tileUrl = isDark ? kMapTileUrlDark : kMapTileUrlLight;
 
     final center = mapState.currentLocation ?? LocationService.defaultLocation;
 
@@ -239,8 +247,8 @@ class _LiveMapState extends ConsumerState<_LiveMap> {
       children: [
         // ── Tile layer ──────────────────────────────────────────────────
         TileLayer(
-          urlTemplate: _osmTileUrl,
-          userAgentPackageName: 'com.triprank.app',
+          urlTemplate: tileUrl,
+          userAgentPackageName: kMapTileUserAgent,
         ),
 
         // ── Route preview polyline (shown before drive starts) ──────────
