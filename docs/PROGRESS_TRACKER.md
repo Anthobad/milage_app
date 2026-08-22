@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: ✅ Completed** _(6.1, 6.2, 6.3, 6.4, 6.4.1, 6.5 complete)_
+**Status: ✅ Completed** _(6.1, 6.2, 6.3, 6.4, 6.4.1, 6.5, 6.6 complete)_
 
 ---
 
@@ -2073,6 +2073,241 @@ None. Uses existing `flutter_map`, `latlong2`, `flutter_riverpod`, and internal 
 - [x] Long destination names wrap correctly
 - [x] All Phase 5 and Phase 6.1–6.4.1 tests continue passing
 - [x] No new packages added
+
+---
+
+---
+
+### Phase 6.6 — Overall Driving Analytics Dashboard
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+Implemented the Overall Driving Analytics Dashboard — the final phase of Phase 6. This page aggregates statistics across **all trips belonging to the currently selected vehicle** and presents them on the existing Analytics screen placeholder.
+
+- **`lib/features/analytics/models/overall_driving_analytics.dart`** _(new)_ — `OverallDrivingAnalytics` immutable model. Contains tripCount, totalDistanceKm, totalDurationSeconds, tripDataPoints (for graphs), averageSpeedKmh (weighted), minimumSpeedKmh, maximumSpeedKmh, totalStops, totalLeftTurns, totalRightTurns, totalUTurns, totalHardBraking, totalSuddenStops, minimumAltitudeM, maximumAltitudeM, totalElevationGainM, totalElevationLossM, movingDurationSeconds, stoppedDurationSeconds (always null — not derivable without GPS reload). Convenience getters `isEmpty`, `totalDistanceLabel`, `totalDurationLabel`.
+- **`lib/features/analytics/models/trip_data_point.dart`** _(new)_ — `TripDataPoint` per-trip graph point. Contains tripId, startTime, distanceKm, averageSpeedKmh?, maximumSpeedKmh?. All values from persisted trips table — no GPS track point loading required for graphs.
+- **`lib/features/analytics/services/overall_analytics_service.dart`** _(new)_ — `OverallAnalyticsService` pure Dart aggregator. Two-step: Step 1 uses persisted Trip summary fields (fast, no GPS). Step 2 uses per-trip DrivingAnalytics (turns, braking, elevation gain/loss, moving duration). Mathematically correct weighted average speed. No Flutter/Riverpod dependency — fully testable.
+- **`lib/features/analytics/providers/overall_analytics_provider.dart`** _(new)_ — `OverallAnalyticsState` + `OverallAnalyticsNotifier` (family Notifier parameterised by vehicleId). Watches `vehicleTripsProvider` for automatic refresh after FINISH. Loads trips via TripRepository, runs per-trip analytics in parallel, aggregates via OverallAnalyticsService. `overallAnalyticsProvider(vehicleId)` family provider. Caches per vehicleId (Riverpod). `reload()` method for manual refresh.
+- **`lib/features/analytics/presentation/analytics_screen.dart`** _(replaced)_ — Full Analytics dashboard. Reads `vehicleProvider` → `selectedVehicleId` → `overallAnalyticsProvider(vehicleId)`. Sections: header (title + vehicle name), overview card, driving statistics card, driving events card (turns + braking), altitude card, three trend graphs (distance, avg speed, top speed). All graphs built from `tripDataPoints` (persisted data — no GPS loading). Graph touch interaction shows tooltip with date + value + link to Trip Stats. Pull-to-refresh. Loading / empty / error states.
+- **`test/features/analytics/overall_analytics_test.dart`** _(new)_ — 40 tests covering all 40 required scenarios (data scope, aggregation, graph data, state, UI widget tests). Uses fake notifiers with `ProviderScope.overrides` — no SQLite/GPS/network required.
+
+#### Selected vehicle scope
+
+The Analytics page is scoped exclusively to the currently selected vehicle:
+
+```
+vehicleProvider.selectedVehicleId
+        ↓
+TripRepository.getTripsForVehicle(vehicleId)     ← SQL: WHERE vehicle_id = ?
+        ↓
+Aggregate only those trips
+        ↓
+OverallDrivingAnalytics(vehicleId: ...)
+```
+
+- No vehicle selected → "No vehicle selected" empty state
+- Vehicle with no trips → "No trips yet" empty state
+- Trips with `vehicle_id = NULL` (deleted vehicle) are excluded by the SQL filter
+- Switching vehicle triggers provider rebuild via `vehicleTripsProvider` watch
+
+#### Aggregation rules
+
+| Statistic | Rule |
+|---|---|
+| tripCount | COUNT of trips |
+| totalDistanceKm | SUM(trip.distanceKm) |
+| totalDurationSeconds | SUM(trip.durationSeconds) |
+| averageSpeedKmh | totalDistanceKm / (movingDurationSeconds / 3600) — weighted, NOT arithmetic mean |
+| maximumSpeedKmh | MAX(trip.maximumSpeedKmh) — excludes null |
+| minimumSpeedKmh | MIN(trip.minimumSpeedKmh) — excludes null |
+| totalStops | SUM(trip.stops) — only trips with non-null stops |
+| totalLeftTurns | SUM(TurnAnalysis.leftTurns) across trips |
+| totalRightTurns | SUM(TurnAnalysis.rightTurns) across trips |
+| totalUTurns | SUM(TurnAnalysis.uTurns) across trips |
+| totalHardBraking | SUM(BrakingAnalysis.hardBrakingCount) across trips |
+| totalSuddenStops | SUM(BrakingAnalysis.suddenStopCount) across trips |
+| minimumAltitudeM | MIN(trip.minimumAltitudeM) — excludes null |
+| maximumAltitudeM | MAX(trip.maximumAltitudeM) — excludes null |
+| totalElevationGainM | SUM(AltitudeAnalysis.totalElevationGainM) — cumulative gain, NOT max-min |
+| totalElevationLossM | SUM(AltitudeAnalysis.totalElevationLossM) — cumulative loss |
+| movingDurationSeconds | SUM(SpeedAnalysis.movingDurationS) — null when unavailable |
+| stoppedDurationSeconds | Always null — cannot be derived without GPS reload |
+
+#### Weighted average speed calculation
+
+```
+averageSpeedKmh = totalDistanceKm / (movingDurationSeconds / 3600)
+
+Example:
+  Trip A: 10 km, 360 s moving time (6 min)
+  Trip B:  1 km, 180 s moving time (3 min)
+  Total: 11 km, 540 s (0.15 h)
+  Correct: 11 / 0.15 = 73.33 km/h   ← implemented
+  Naive:   (100 + 20) / 2 = 60 km/h ← NOT implemented
+```
+
+#### Provider architecture
+
+```
+AnalyticsScreen
+        ↓
+vehicleProvider (AsyncNotifier<VehicleState>)
+        ↓  selectedVehicleId
+overallAnalyticsProvider(vehicleId)  ← NotifierProvider.family
+        ↓
+OverallAnalyticsNotifier
+    ├── watches vehicleTripsProvider  ← auto-refresh on FINISH
+    ├── TripRepository.getTripsForVehicle()
+    ├── per-trip: TrackPointRepository + DrivingAnalyticsService (parallel)
+    └── OverallAnalyticsService.aggregate()
+                ↓
+        OverallAnalyticsState
+            ├── isLoading=true         → loading
+            ├── analytics.isEmpty=true → empty ("No trips yet")
+            ├── analytics.isEmpty=false → loaded dashboard
+            └── error!=null            → error + retry button
+```
+
+#### Analytics page UI
+
+1. **Header** — "Analytics" title + selected vehicle brand/model (truncated on narrow screens)
+2. **Overview card** — Trips, Distance, Drive time (row 1); Avg speed (green), Top speed (orange) (row 2)
+3. **Driving statistics card** — Avg/Min/Max speed row; Stops + Moving time row
+4. **Driving events card** — Left/Right/U-turns row; Hard braking + Sudden stops row (hidden when no event data)
+5. **Altitude card** — Min/Max altitude; Elevation gain (green) + loss (orange) (hidden when no altitude data)
+6. **Distance per trip graph** — CustomPainter trend graph, X = trip index, Y = km. Area fill + line + crosshair. Touch to inspect.
+7. **Average speed per trip graph** — Same layout, Y = km/h, green line (hidden when < 2 trips with speed data)
+8. **Top speed per trip graph** — Y = km/h, orange line (hidden when < 2 trips with speed data)
+
+#### Trend graphs
+
+- X-axis: trip index (0-based), labeled as trip number
+- Y-axis: metric value with unit labels
+- Fit to phone width (AspectRatio 2.6), no horizontal scrolling
+- Touch/drag: nearest-point snapping, tooltip shows date + value
+- Tooltip tap: navigates to Trip Stats for that trip via `context.go(AppRoutes.tripStatsPath(tripId))`
+- Data source: `OverallDrivingAnalytics.tripDataPoints` (persisted summary — no GPS loading)
+- Chronological ordering: oldest trip at left, newest at right
+
+#### Loading state
+
+- Initial build: `OverallAnalyticsState(isLoading: true)` → loading card with spinner
+- Provider loads asynchronously via `Future.microtask`
+- Pull-to-refresh: `RefreshIndicator` calls `notifier.reload()`
+
+#### Empty state
+
+- No vehicle selected: icon + "No vehicle selected" + explanation
+- Vehicle has no trips: icon + "No trips yet" + explanation
+
+#### Error state
+
+- Non-null `error` → error icon + message + "Retry" button → calls `notifier.reload()`
+- No raw SQLite messages exposed to UI
+
+#### Offline behavior
+
+- All data from local SQLite via TripRepository + TrackPointRepository
+- No HTTP, no reverse geocoding, no map tiles, no cloud calls
+- 100% offline — same behavior with or without network
+
+#### Performance decisions
+
+- GPS track points loaded only for detailed analytics (turns, braking, elevation, moving duration)
+- Persisted Trip summary fields used for all summary stats (no GPS needed for graphs, min/max, totals)
+- Per-trip analytics run in parallel: `Future.wait(trips.map(...))`
+- Riverpod family caches result per vehicleId — no recomputation on widget rebuild
+- Changing vehicle builds a fresh state for the new vehicleId
+- `vehicleTripsProvider` watch causes automatic rebuild after FINISH (existing mechanism reused)
+
+#### No changes to
+
+- GPS tracking / DriveController / foreground service
+- Trip Stats screen
+- Database schema (no migration, no new tables, no new columns)
+- Any existing providers not related to Analytics
+
+#### Files created
+
+- `lib/features/analytics/models/overall_driving_analytics.dart`
+- `lib/features/analytics/models/trip_data_point.dart`
+- `lib/features/analytics/services/overall_analytics_service.dart`
+- `lib/features/analytics/providers/overall_analytics_provider.dart`
+- `test/features/analytics/overall_analytics_test.dart`
+
+#### Files modified
+
+- `lib/features/analytics/presentation/analytics_screen.dart` (full replacement of placeholder)
+- `docs/PROGRESS_TRACKER.md` (Phase 6.6 added, Phase 6 marked complete)
+
+#### Dependencies added
+
+None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/services.
+
+#### Tests added (40)
+
+| Group | Tests |
+|---|---|
+| Data scope | 1–6 (no trips, one trip, multiple trips, other vehicles excluded, vehicle change, null vehicle_id) |
+| Aggregation | 7–22 (trip count, distance, duration, weighted avg speed, max speed, min speed, stops, left turns, right turns, U-turns, hard braking, sudden stops, elevation gain/loss, min/max altitude) |
+| Graph data | 23–27 (distance chrono, avg speed chrono, max speed chrono, null values excluded, point→trip mapping) |
+| State | 28–32 (loading, empty, error, successful load, caching) |
+| UI widget | 33–40 (title, vehicle, overview stats, events, altitude, graphs, no overflow, long names) |
+| Model | bonus model completeness tests |
+
+#### Verification
+
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **464 tests passed**:
+  - 416 pre-existing tests (Phases 5.1–6.5 + smoke test) ✅
+  - 40 new Phase 6.6 tests ✅
+    - 6 Data scope tests
+    - 16 Aggregation tests
+    - 5 Graph data tests
+    - 5 State tests
+    - 8 UI widget tests (33–40)
+    - Bonus model completeness tests
+- [x] Existing Analytics placeholder replaced with real dashboard
+- [x] No second Analytics page created
+- [x] Analytics scoped to selected vehicle only
+- [x] No vehicle selected → proper empty state
+- [x] No trips → "No trips yet" empty state
+- [x] Weighted average speed (not arithmetic mean)
+- [x] Elevation gain/loss from AltitudeAnalysis (not max-min)
+- [x] Turns/braking from per-trip DrivingAnalytics (no duplicate algorithms)
+- [x] Stops from persisted trip.stops
+- [x] Trend graphs from tripDataPoints (no GPS loading for graphs)
+- [x] Graph touch interaction + Trip Stats navigation
+- [x] Auto-refresh after FINISH via vehicleTripsProvider
+- [x] Pull-to-refresh
+- [x] Loading / empty / error states
+- [x] Offline: zero network calls
+- [x] No horizontal overflow on 320–390 px screens
+- [x] Long vehicle names handled (ellipsis, Flexible)
+- [x] No database schema changes
+- [x] No new packages added
+- [x] All Phase 5 and Phase 6.1–6.5 tests continue passing
+
+#### Physical-device testing still required
+
+- Verify Analytics page renders correctly on a real device with multiple trips
+- Verify switching vehicles updates the Analytics page
+- Verify "No trips yet" state on a vehicle with no completed drives
+- Verify trend graphs render and touch interaction works on a touch screen
+- Verify pull-to-refresh triggers reload
+- Verify page appears after a fresh FINISH completes a new trip
+
+#### Known limitations
+
+- `movingDurationSeconds` (and therefore `averageSpeedKmh`) requires GPS track points to be analyzed. For vehicles where all trips were recorded before Phase 6.1 (analytics) was wired, this may be null.
+- Elevation gain/loss requires GPS altitude data. Trips without altitude (GPS denied or hardware limitation) contribute nothing to the elevation statistics.
+- `stoppedDurationSeconds` is always null — deriving it accurately requires reloading all GPS track points per trip, which violates the performance architecture.
+- For vehicles with very many trips (e.g. 500+), parallel per-trip analytics loading may be slow. A future phase could add analytics result caching to SQLite.
+- The trend graphs use trip index on the X-axis rather than calendar date. This means gaps between trips are not visible.
 
 ---
 
