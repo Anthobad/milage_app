@@ -5,6 +5,7 @@ import '../features/analytics/presentation/analytics_screen.dart';
 import '../features/cars/presentation/cars_screen.dart';
 import '../features/map/presentation/map_screen.dart';
 import '../features/profile/presentation/about_screen.dart';
+import '../features/profile/presentation/appearance_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
 import '../features/profile/presentation/settings_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
@@ -131,8 +132,7 @@ final GoRouter appRouter = GoRouter(
                 // page navigates directly here, not to a shared settings hub.
                 GoRoute(
                   path: 'settings/appearance',
-                  builder: (context, state) =>
-                      const SettingPlaceholderScreen(title: 'Appearance'),
+                  builder: (context, state) => const AppearanceScreen(),
                 ),
                 GoRoute(
                   path: 'settings/map-appearance',

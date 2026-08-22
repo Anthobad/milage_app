@@ -31,9 +31,11 @@ class _AppContent extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Watches the global theme provider — defaults to ThemeMode.dark.
-    // Can be changed at runtime (e.g. from Profile & Settings in Phase 7).
-    final ThemeMode themeMode = ref.watch(themeProvider);
+    // Watches the global theme provider — persisted via SharedPreferences.
+    // Falls back to ThemeMode.dark while the async load is in progress
+    // (typically imperceptible — prefs load in < 1 ms).
+    final ThemeMode themeMode =
+        ref.watch(themeProvider).value ?? ThemeMode.dark;
 
     return MaterialApp.router(
       title: 'TripRank',

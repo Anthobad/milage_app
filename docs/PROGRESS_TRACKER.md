@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 7.1 complete_
+_Last updated: 2026-08-22 — Phase 7.2 complete_
 
 ---
 
@@ -2313,7 +2313,7 @@ None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/s
 
 ## Phase 7 — Profile & Settings
 
-**Status: 🔄 In Progress** _(Phase 7.1 complete)_
+**Status: 🔄 In Progress** _(Phase 7.1, 7.2 complete)_
 
 ---
 
@@ -2436,6 +2436,130 @@ Model unit tests (5):
 - SharedPreferences persistence for the selected image path
 - Individual settings page implementations (Appearance, Map Appearance, Units, Permissions) — later Phase 7 tasks
 - About TripRank content (version, licenses, etc.) — later Phase 7 tasks
+
+---
+
+### Phase 7.2 — Appearance Settings
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+Implemented the dedicated Appearance settings page that is opened when the user taps "Appearance" from the Profile page.
+
+- **`lib/app/theme/theme_provider.dart`** _(replaced)_ — `ThemeModeNotifier` refactored from `Notifier<ThemeMode>` to `AsyncNotifier<ThemeMode>`. `build()` reads the persisted value from SharedPreferences (key: `'theme_mode'`) on cold start. `setTheme(ThemeMode)` updates state immediately (optimistic) then persists to SharedPreferences. `kThemeModePreferenceKey = 'theme_mode'` constant exported for test use. Falls back to `ThemeMode.dark` when no preference is saved.
+- **`lib/features/profile/presentation/appearance_screen.dart`** _(new)_ — Dedicated `AppearanceScreen` `ConsumerWidget`. Shows "THEME" section label followed by a rounded card containing three `InkWell` rows: Dark (🌙), Light (☀️), System (⚙️). The active option shows a blue `Icons.check` checkmark. Tapping any row immediately calls `themeProvider.notifier.setTheme()`. Uses `Theme.of(context)` colors throughout so the page itself responds to the selected theme.
+- **`lib/app/app.dart`** _(modified)_ — `_AppContent.build()` updated to read `ref.watch(themeProvider).value ?? ThemeMode.dark` (AsyncValue API; falls back to dark during the < 1 ms load window).
+- **`lib/app/router.dart`** _(modified)_ — The `settings/appearance` route now builds `AppearanceScreen()` instead of `SettingPlaceholderScreen(title: 'Appearance')`.
+- **`test/widget_test.dart`** _(modified)_ — Added `SharedPreferences.setMockInitialValues({})` before widget pump so the async `ThemeModeNotifier.build()` succeeds in the test environment.
+- **`test/features/profile/appearance_settings_test.dart`** _(new)_ — 22 tests covering all 14 specified scenarios.
+
+#### Appearance page behavior
+
+- Three options: **Dark**, **Light**, **System**
+- Default (no saved preference): **Dark**
+- Selecting any option applies immediately — no restart required
+- Active option shows a checkmark; only one option is active at a time
+- Theme change updates the entire TripRank application UI
+- Map theme is NOT controlled by this setting (Phase 7.3)
+
+#### Theme architecture
+
+```
+AppearanceScreen (UI)
+      ↓
+themeProvider.notifier.setTheme(ThemeMode)
+      ↓
+ThemeModeNotifier (AsyncNotifier<ThemeMode>)
+      ├── build() → SharedPreferences.getString('theme_mode') → ThemeMode
+      └── setTheme() → state = AsyncData(mode) → prefs.setString(...)
+              ↓
+_AppContent (ConsumerWidget in app.dart)
+      ↓
+ref.watch(themeProvider).value ?? ThemeMode.dark
+      ↓
+MaterialApp.router(themeMode: ...)
+      ↓
+AppTheme.dark / AppTheme.light / platform
+```
+
+Single authoritative source — no duplicate theme state.
+
+#### Persistence mechanism
+
+- Package: `shared_preferences ^2.5.5` (already a project dependency)
+- Key: `'theme_mode'`
+- Stored values: `'dark'` | `'light'` | `'system'`
+- Default (absent key): `ThemeMode.dark`
+- NOT stored in the trip/vehicle SQLite tables — correct for an app preference
+- Survives: widget rebuilds, navigation, app close/reopen, phone restart
+
+#### Map-theme separation
+
+`ThemeModeNotifier` controls only the Flutter `MaterialApp` `themeMode`. The map's `MapTheme` enum (`MapState.mapTheme`) is managed independently by `MapNotifier` and is NOT read or written by `ThemeModeNotifier`. Test scenario 13 (map theme unchanged after app theme change) verifies this explicitly.
+
+#### Navigation
+
+```
+Profile page
+    └── Appearance row → context.push(AppRoutes.profileAppearance)
+            ↓
+        AppearanceScreen  (/profile/settings/appearance)
+            └── AppBar back button → returns to Profile
+```
+
+No intermediate Settings hub page was created.
+
+#### Files created
+- `lib/features/profile/presentation/appearance_screen.dart`
+- `test/features/profile/appearance_settings_test.dart`
+
+#### Files modified
+- `lib/app/theme/theme_provider.dart` — converted to `AsyncNotifier` with SharedPreferences persistence
+- `lib/app/app.dart` — updated to read `.value` from `AsyncValue<ThemeMode>`
+- `lib/app/router.dart` — appearance route now points to `AppearanceScreen`
+- `test/widget_test.dart` — added `SharedPreferences.setMockInitialValues({})`
+
+#### Tests performed (22 total)
+
+Widget tests (17):
+1. Appearance page renders without crashing
+2. Dark, Light, and System options are visible
+3. Dark is selected when no preference has been saved
+4. Selecting Light updates the application ThemeMode
+5. Selecting Dark updates the application ThemeMode
+6. Selecting System updates the application ThemeMode
+7a. Checkmark is on Dark when Dark is the initial preference
+7b. Checkmark is on Light when Light is the initial preference
+7c. Checkmark is on System when System is the initial preference
+8. Only one option is selected at a time
+9. The selected preference persists after provider/state recreation
+10a. Persisted Dark preference is restored on cold start
+10b. Persisted Light preference is restored on cold start
+10c. Persisted System preference is restored on cold start
+11. Profile → Appearance navigation works
+12. The Appearance page can be exited and returned to Profile
+13. Changing app appearance does NOT modify the map theme setting
+
+Provider / model unit tests (5):
+- Default theme is dark when no preference is saved
+- setTheme(light) changes state to light
+- setTheme(system) changes state to system
+- kThemeModePreferenceKey is correct storage key
+- dark is the fallback when async value is null/loading
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- `flutter test` → **505 tests passed** (483 pre-existing + 22 new Phase 7.2 tests)
+- No regressions introduced.
+
+#### Deferred work
+- Map Appearance settings (Phase 7.3)
+- Units settings (future Phase 7 task)
+- Permissions settings (future Phase 7 task)
+- About TripRank content (future Phase 7 task)
 
 ---
 
