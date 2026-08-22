@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
-// Phase 7.5 — About Milage Page Tests
+// Phase 7.5 — About Mileage Page Tests
 // ---------------------------------------------------------------------------
 //
 // Covers all 17 scenarios specified in docs/feature_spec/about_page.md:
 //
 //  1.  About page renders.
-//  2.  Page title displays "About Milage".
-//  3.  "Milage" app name is displayed.
+//  2.  Page title displays "About Mileage".
+//  3.  "Mileage" app name is displayed.
 //  4.  "Personal Driving Tracker" is displayed.
 //  5.  Description is displayed.
 //  6.  "Built for personal use." is displayed.
-//  7.  Stored Milage icon is displayed (Image.asset widget present).
+//  7.  Stored Mileage icon is displayed (Image.asset widget present).
 //  8.  Version information loads successfully.
 //  9.  Version is not hardcoded in the UI.
 // 10.  Version-loading failure does not crash the page.
@@ -188,19 +188,19 @@ void main() {
       expect(find.byType(AboutScreen), findsOneWidget);
     });
 
-    testWidgets('Test 2: Page title displays "About Milage"', (tester) async {
+    testWidgets('Test 2: Page title displays "About Mileage"', (tester) async {
       await tester.pumpWidget(_buildAboutScreen());
       await tester.pump();
       // The AppBar title has Key('about_page_title').
       expect(find.byKey(const Key('about_page_title')), findsOneWidget);
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
     });
 
-    testWidgets('Test 3: "Milage" app name is displayed', (tester) async {
+    testWidgets('Test 3: "Mileage" app name is displayed', (tester) async {
       await tester.pumpWidget(_buildAboutScreen());
       await tester.pump();
       expect(find.byKey(const Key('about_app_name')), findsOneWidget);
-      expect(find.text('Milage'), findsOneWidget);
+      expect(find.text('Mileage'), findsOneWidget);
     });
 
     testWidgets('Test 4: "Personal Driving Tracker" subtitle is displayed',
@@ -235,7 +235,7 @@ void main() {
 
   group('AboutScreen — App icon', () {
     testWidgets(
-        'Test 7: Milage icon widget is present (Image.asset with correct key)',
+        'Test 7: Mileage icon widget is present (Image.asset with correct key)',
         (tester) async {
       await tester.pumpWidget(_buildAboutScreen());
       await tester.pump();
@@ -357,8 +357,8 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 3));
 
       // Page is still alive — core elements are visible.
-      expect(find.text('Milage'), findsOneWidget);
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('Mileage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
       expect(find.text('Built for personal use.'), findsOneWidget);
     });
   });
@@ -398,7 +398,7 @@ void main() {
       // route. In this test the router starts directly at /about so there's
       // no system back button — but the AppBar is present and the title is
       // visible, confirming the scaffold renders.
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
     });
 
     testWidgets('Test 12: Profile → About navigation works', (tester) async {
@@ -407,21 +407,17 @@ void main() {
       await tester.pumpWidget(_buildProfileAboutNav(router: router));
       await tester.pumpAndSettle();
 
-      // Scroll the profile page so the "About Milage" row is visible.
-      await tester.scrollUntilVisible(
-        find.byKey(const Key('about_milage_row')),
-        100.0,
-        scrollable: find.byType(Scrollable).first,
-      );
+      // Ensure the "About Mileage" row is visible (scroll if needed).
+      await tester.ensureVisible(find.byKey(const Key('about_milage_row')));
       await tester.pumpAndSettle();
 
-      // Now tap the "About Milage" row.
+      // Now tap the "About Mileage" row.
       await tester.tap(find.byKey(const Key('about_milage_row')));
       await tester.pumpAndSettle();
 
       // After navigation, the About screen must be visible.
-      expect(find.text('About Milage'), findsOneWidget);
-      expect(find.text('Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
+      expect(find.text('Mileage'), findsOneWidget);
     });
 
     testWidgets('Test 13: About → Profile back navigation works',
@@ -431,18 +427,14 @@ void main() {
       await tester.pumpWidget(_buildProfileAboutNav(router: router));
       await tester.pumpAndSettle();
 
-      // Scroll to and tap "About Milage" row to navigate.
-      await tester.scrollUntilVisible(
-        find.byKey(const Key('about_milage_row')),
-        100.0,
-        scrollable: find.byType(Scrollable).first,
-      );
+      // Ensure the "About Mileage" row is visible and tap it.
+      await tester.ensureVisible(find.byKey(const Key('about_milage_row')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('about_milage_row')));
       await tester.pumpAndSettle();
 
       // Confirm we are on the About screen.
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
 
       // Navigate back using the router.
       final navigatorState =
@@ -450,7 +442,6 @@ void main() {
       if (navigatorState.canPop()) {
         navigatorState.pop();
       } else {
-        // Fallback: use router's back method.
         router.pop();
       }
       await tester.pumpAndSettle();
@@ -472,8 +463,8 @@ void main() {
       await tester.pump();
 
       // Page renders without overflow or exception.
-      expect(find.text('About Milage'), findsOneWidget);
-      expect(find.text('Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
+      expect(find.text('Mileage'), findsOneWidget);
       expect(find.text('Personal Driving Tracker'), findsOneWidget);
     });
 
@@ -482,8 +473,8 @@ void main() {
       await tester.pump();
 
       // Page renders without overflow or exception.
-      expect(find.text('About Milage'), findsOneWidget);
-      expect(find.text('Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
+      expect(find.text('Mileage'), findsOneWidget);
       expect(find.text('Personal Driving Tracker'), findsOneWidget);
     });
   });
@@ -513,7 +504,7 @@ void main() {
       // flutter_test captures overflow errors — if none are collected the
       // test passes automatically. We also verify the key elements are
       // still accessible.
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
     });
   });
 

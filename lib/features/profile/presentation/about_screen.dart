@@ -6,12 +6,12 @@ import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
 
 // ---------------------------------------------------------------------------
-// About Milage — Phase 7.5
+// About Mileage — Phase 7.5
 // ---------------------------------------------------------------------------
 //
 // Displays:
 //   • App icon (assets/images/mileage_icon.png)
-//   • App name: "Milage"
+//   • App name: "Mileage"
 //   • Subtitle: "Personal Driving Tracker"
 //   • Version card (loaded dynamically via package_info_plus)
 //   • About description card
@@ -58,7 +58,7 @@ class AboutScreen extends ConsumerWidget {
         foregroundColor: Theme.of(context).colorScheme.onSurface,
         elevation: 0,
         title: const Text(
-          'About Milage',
+          'About Mileage',
           key: Key('about_page_title'),
         ),
       ),
@@ -97,7 +97,7 @@ class _AppIconSection extends StatelessWidget {
       children: [
         const SizedBox(height: AppSpacing.md),
 
-        // Milage icon — uses the existing stored asset.
+        // Mileage icon — uses the existing stored asset.
         // DO NOT configure launcher icons here (Phase 8).
         Center(
           child: ClipRRect(
@@ -134,7 +134,7 @@ class _AppIconSection extends StatelessWidget {
         // App name
         const Center(
           child: Text(
-            'Milage',
+            'Mileage',
             key: Key('about_app_name'),
             style: TextStyle(
               color: AppColors.textPrimaryDark,
@@ -245,7 +245,7 @@ class _AboutCard extends StatelessWidget {
       sectionLabel: 'ABOUT',
       children: [
         Text(
-          'Milage is a personal driving tracker that records trips and provides '
+          'Mileage is a personal driving tracker that records trips and provides '
           'driving statistics and analytics.',
           key: Key('about_description'),
           style: TextStyle(

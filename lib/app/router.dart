@@ -35,7 +35,7 @@ class AppRoutes {
   /// Units settings — accessed from the Profile page.
   static const String profileUnits = '/profile/settings/units';
 
-  /// About Milage page — accessed from the Profile page.
+  /// About Mileage page — accessed from the Profile page.
   static const String profileAbout = '/profile/about';
 
   // ── Trip routes ────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ final GoRouter appRouter = GoRouter(
                   path: 'settings/units',
                   builder: (context, state) => const UnitsScreen(),
                 ),
-                // About Milage
+                // About Mileage
                 GoRoute(
                   path: 'about',
                   builder: (context, state) => const AboutScreen(),

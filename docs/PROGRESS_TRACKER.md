@@ -2877,21 +2877,21 @@ Unit preference is `UnitSystem.metric` when no saved preference exists. This pre
 
 ---
 
-### Phase 7.5 — About Milage Page
+### Phase 7.5 — About Mileage Page
 
 **Status: ✅ Done**
 **Completed: 2026-08-23**
 
 #### What was done
 
-Implemented the final About page for the Profile section, accessible from Profile → About Milage.
+Implemented the final About page for the Profile section, accessible from Profile → About Mileage.
 
-- **`lib/features/profile/presentation/about_screen.dart`** _(completed)_ — Full `AboutScreen` implementation. AppBar with title "About Milage". Sections: app icon (`assets/images/mileage_icon.png`, 96×96, with graceful fallback on asset load failure), app name "Milage" with "Personal Driving Tracker" subtitle, dynamic version card (loaded via `package_info_plus`), About description card, and footer "Built for personal use." Fully scrollable via `ListView` so no overflow occurs on narrow screens.
+- **`lib/features/profile/presentation/about_screen.dart`** _(completed)_ — Full `AboutScreen` implementation. AppBar with title "About Mileage". Sections: app icon (`assets/images/mileage_icon.png`, 96×96, with graceful fallback on asset load failure), app name "Mileage" with "Personal Driving Tracker" subtitle, dynamic version card (loaded via `package_info_plus`), About description card, and footer "Built for personal use." Fully scrollable via `ListView` so no overflow occurs on narrow screens.
 - **`pubspec.yaml`** _(modified)_ — `package_info_plus` version constraint bumped from `^8.3.0` to `^10.2.1` to resolve transitive dependency conflict with `geolocator_linux ^0.2.6`.
 - **`lib/app/router.dart`** _(already wired in Phase 7.1)_ — `AppRoutes.profileAbout = '/profile/about'` route correctly wires to `AboutScreen()` inside the Profile branch.
 - **`lib/features/profile/presentation/profile_screen.dart`** _(already wired in Phase 7.1)_ — `_AboutSectionCard` navigates to `AppRoutes.profileAbout` when tapped.
 - **`test/features/profile/about_page_test.dart`** _(new)_ — 18 widget tests (17 required + 1 bonus) covering all spec scenarios.
-- **`test/features/profile/profile_page_test.dart`** _(updated)_ — Test 10 updated from "About TripRank" to "About Milage" to match the actual label.
+- **`test/features/profile/profile_page_test.dart`** _(updated)_ — Test 10 updated from "About TripRank" to "About Mileage" to match the actual label.
 
 #### App icon
 
@@ -2907,7 +2907,7 @@ The stored Milage icon asset at `assets/images/mileage_icon.png` is used as an `
 
 ```
 Profile
-   ↓ (tap "About Milage" row)
+   ↓ (tap "About Mileage" row)
 /profile/about  →  AboutScreen
    ↓ (back button)
 Profile
@@ -2926,8 +2926,8 @@ Three `flutter analyze` issues were resolved during Phase 7.5:
 | # | Scenario | Result |
 |---|---|---|
 | 1 | About page renders without crashing | ✅ |
-| 2 | Page title displays "About Milage" | ✅ |
-| 3 | "Milage" app name is displayed | ✅ |
+| 2 | Page title displays "About Mileage" | ✅ |
+| 3 | "Mileage" app name is displayed | ✅ |
 | 4 | "Personal Driving Tracker" is displayed | ✅ |
 | 5 | Description is displayed | ✅ |
 | 6 | "Built for personal use." is displayed | ✅ |
@@ -2960,7 +2960,7 @@ None — routing was already wired in Phase 7.1.
 - `flutter analyze` → **No issues found.**
 - `flutter test` → **635 tests passed** (617 pre-existing + 18 new Phase 7.5 tests)
 - No launcher icon changes were introduced.
-- About Milage navigation works (Profile → About → back → Profile).
+- About Mileage navigation works (Profile → About → back → Profile).
 - Icon displays via `Image.asset('assets/images/mileage_icon.png')`.
 - Version displays dynamically via `package_info_plus`.
 

@@ -385,7 +385,7 @@ class _AboutSectionCard extends StatelessWidget {
       child: _NavRow(
         key: const Key('about_milage_row'),
         icon: Icons.info_outline,
-        label: 'About Milage',
+        label: 'About Mileage',
         isLast: true,
         onTap: () => context.push(AppRoutes.profileAbout),
       ),

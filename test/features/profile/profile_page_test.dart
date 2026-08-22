@@ -249,12 +249,12 @@ void main() {
     });
 
     // ── Test 10 ─────────────────────────────────────────────────────────────
-    testWidgets('10. About Milage row is present', (tester) async {
+    testWidgets('10. About Mileage row is present', (tester) async {
       await tester.pumpWidget(_buildProfileScreen());
       await tester.pump();
 
       expect(find.text('ABOUT'), findsOneWidget);
-      expect(find.text('About Milage'), findsOneWidget);
+      expect(find.text('About Mileage'), findsOneWidget);
     });
 
     // ── Test 11 ─────────────────────────────────────────────────────────────
