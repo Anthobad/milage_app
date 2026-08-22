@@ -49,6 +49,10 @@ dependencies:
   flutter_foreground_task: ^10.0.0
   sqflite: ^2.4.3
   path: ^1.9.1
+  # Provides application name, version, and build number at runtime.
+  # Used by the About Milage page (Phase 7.5) to display the dynamic version.
+  # Version bumped to ^10.2.1 to satisfy geolocator_linux transitive constraint.
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:

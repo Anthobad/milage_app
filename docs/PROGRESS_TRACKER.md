@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 7.4 complete_
+_Last updated: 2026-08-23 — Phase 7.5 complete_
 
 ---
 
@@ -2313,7 +2313,7 @@ None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/s
 
 ## Phase 7 — Profile & Settings
 
-**Status: 🔄 In Progress** _(Phase 7.1, 7.2, 7.3, 7.4 complete)_
+**Status: 🔄 In Progress** _(Phase 7.1, 7.2, 7.3, 7.4, 7.5 complete)_
 
 ---
 
@@ -2874,6 +2874,104 @@ Unit preference is `UnitSystem.metric` when no saved preference exists. This pre
 #### Deferred work
 - Permissions settings (future Phase 7 task)
 - About TripRank content (future Phase 7 task)
+
+---
+
+### Phase 7.5 — About Milage Page
+
+**Status: ✅ Done**
+**Completed: 2026-08-23**
+
+#### What was done
+
+Implemented the final About page for the Profile section, accessible from Profile → About Milage.
+
+- **`lib/features/profile/presentation/about_screen.dart`** _(completed)_ — Full `AboutScreen` implementation. AppBar with title "About Milage". Sections: app icon (`assets/images/mileage_icon.png`, 96×96, with graceful fallback on asset load failure), app name "Milage" with "Personal Driving Tracker" subtitle, dynamic version card (loaded via `package_info_plus`), About description card, and footer "Built for personal use." Fully scrollable via `ListView` so no overflow occurs on narrow screens.
+- **`pubspec.yaml`** _(modified)_ — `package_info_plus` version constraint bumped from `^8.3.0` to `^10.2.1` to resolve transitive dependency conflict with `geolocator_linux ^0.2.6`.
+- **`lib/app/router.dart`** _(already wired in Phase 7.1)_ — `AppRoutes.profileAbout = '/profile/about'` route correctly wires to `AboutScreen()` inside the Profile branch.
+- **`lib/features/profile/presentation/profile_screen.dart`** _(already wired in Phase 7.1)_ — `_AboutSectionCard` navigates to `AppRoutes.profileAbout` when tapped.
+- **`test/features/profile/about_page_test.dart`** _(new)_ — 18 widget tests (17 required + 1 bonus) covering all spec scenarios.
+- **`test/features/profile/profile_page_test.dart`** _(updated)_ — Test 10 updated from "About TripRank" to "About Milage" to match the actual label.
+
+#### App icon
+
+The stored Milage icon asset at `assets/images/mileage_icon.png` is used as an `Image.asset` inside the About page. Its display size is 96×96 px with `BoxFit.contain` (aspect ratio preserved). A `ClipRRect` with `radiusXl` rounding is applied. An `errorBuilder` fallback (blue car icon) is rendered if the asset fails to load.
+
+**Launcher/app icon integration remains deferred to Phase 8.**
+
+#### Version implementation
+
+`_appVersionProvider` is a `FutureProvider<String?>` that calls `PackageInfo.fromPlatform()` from the `package_info_plus` package. On success it returns the version string from `pubspec.yaml` (e.g. `1.0.0`). The version is never hardcoded. On failure (platform channel unavailable in test environments) it returns `null` and the UI shows `"—"` as a graceful fallback. The page never crashes due to version loading failure.
+
+#### Navigation
+
+```
+Profile
+   ↓ (tap "About Milage" row)
+/profile/about  →  AboutScreen
+   ↓ (back button)
+Profile
+```
+
+#### Analyze issues fixed
+
+Three `flutter analyze` issues were resolved during Phase 7.5:
+
+1. `unnecessary_underscores` in `_VersionCard.error` callback — changed `(_, __)` to `(e, _)`.
+2. `unused_element_parameter` in `_SectionCard` — removed `super.key` from private class constructor.
+3. `non_type_as_type_argument` in test — changed `List<Override>` to `List<Object>` with `.cast()`.
+
+#### Tests (18 total — 17 required + 1 bonus)
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | About page renders without crashing | ✅ |
+| 2 | Page title displays "About Milage" | ✅ |
+| 3 | "Milage" app name is displayed | ✅ |
+| 4 | "Personal Driving Tracker" is displayed | ✅ |
+| 5 | Description is displayed | ✅ |
+| 6 | "Built for personal use." is displayed | ✅ |
+| 7 | Stored Milage icon widget is present | ✅ |
+| 7b | Image.asset for mileage_icon.png in widget tree | ✅ bonus |
+| 8 | Version section renders (loading/value/fallback key present) | ✅ |
+| 9 | Version is not hardcoded | ✅ |
+| 10 | Version-loading failure does not crash the page | ✅ |
+| 11 | Back button / AppBar present | ✅ |
+| 12 | Profile → About navigation works | ✅ |
+| 13 | About → Profile back navigation works | ✅ |
+| 14 | Page renders correctly in dark theme | ✅ |
+| 15 | Page renders correctly in light theme | ✅ |
+| 16 | Page does not overflow on 320 px narrow screen | ✅ |
+| 17 | Existing Profile rows still present (regression guard) | ✅ |
+
+#### Files created
+- `test/features/profile/about_page_test.dart`
+
+#### Files modified
+- `lib/features/profile/presentation/about_screen.dart` — fixed 2 analyze issues
+- `pubspec.yaml` — bumped `package_info_plus` to `^10.2.1`
+- `test/features/profile/profile_page_test.dart` — updated test 10 label
+
+#### Navigation changes
+None — routing was already wired in Phase 7.1.
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- `flutter test` → **635 tests passed** (617 pre-existing + 18 new Phase 7.5 tests)
+- No launcher icon changes were introduced.
+- About Milage navigation works (Profile → About → back → Profile).
+- Icon displays via `Image.asset('assets/images/mileage_icon.png')`.
+- Version displays dynamically via `package_info_plus`.
+
+#### Deferred work (Phase 8)
+- Android launcher icon configuration
+- Adaptive icon
+- Final icon sizing and background
+- Splash screen / app branding
+- Final visual polish
+
+**Launcher/app icon integration remains deferred to Phase 8.**
 
 ---
 

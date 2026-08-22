@@ -383,9 +383,9 @@ class _AboutSectionCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
       ),
       child: _NavRow(
-        key: const Key('about_triprank_row'),
+        key: const Key('about_milage_row'),
         icon: Icons.info_outline,
-        label: 'About TripRank',
+        label: 'About Milage',
         isLast: true,
         onTap: () => context.push(AppRoutes.profileAbout),
       ),
