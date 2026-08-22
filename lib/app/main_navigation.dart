@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/cars/presentation/widgets/car_selector_sheet.dart';
+import '../features/map/providers/open_car_sheet_provider.dart';
 import 'theme/colors.dart';
 import 'theme/spacing.dart';
 
@@ -37,16 +39,16 @@ const double _kNavBarStaticHeight =
 ///
 /// The Cars tab is special — it shows [CarSelectorSheet] as an inline
 /// overlay inside the same Stack so the nav bar remains fully interactive.
-class MainNavigation extends StatefulWidget {
+class MainNavigation extends ConsumerStatefulWidget {
   const MainNavigation({super.key, required this.navigationShell});
 
   final StatefulNavigationShell navigationShell;
 
   @override
-  State<MainNavigation> createState() => _MainNavigationState();
+  ConsumerState<MainNavigation> createState() => _MainNavigationState();
 }
 
-class _MainNavigationState extends State<MainNavigation>
+class _MainNavigationState extends ConsumerState<MainNavigation>
     with SingleTickerProviderStateMixin {
   static const List<_NavItem> _items = [
     _NavItem(label: 'Map',       icon: Icons.map_outlined,            activeIcon: Icons.map),
@@ -118,6 +120,17 @@ class _MainNavigationState extends State<MainNavigation>
 
   @override
   Widget build(BuildContext context) {
+    // Listen for programmatic requests to open the car sheet (e.g. from the
+    // no-vehicle dialog on the Start Drive button).  Resets to false after
+    // acting so repeated requests work correctly.
+    ref.listen<bool>(openCarSheetProvider, (_, shouldOpen) {
+      if (shouldOpen) {
+        _openSheet();
+        // Reset the flag so a future request triggers the listener again.
+        ref.read(openCarSheetProvider.notifier).reset();
+      }
+    });
+
     final bottomInset = MediaQuery.of(context).padding.bottom;
 
     // Total height from screen bottom to the top of the nav bar.

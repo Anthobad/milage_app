@@ -5,9 +5,11 @@ import 'package:go_router/go_router.dart';
 import '../../../../app/router.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../../../cars/providers/vehicle_provider.dart';
 import '../../models/drive_state.dart';
 import '../../providers/destination_provider.dart';
 import '../../providers/drive_provider.dart';
+import '../../providers/open_car_sheet_provider.dart';
 import '../../providers/route_provider.dart';
 
 // ---------------------------------------------------------------------------
@@ -135,6 +137,16 @@ class StartDriveButton extends ConsumerWidget {
     }
 
     // ── START ──────────────────────────────────────────────────────────────
+    // Guard: a vehicle must be selected before starting any drive mode.
+    // A new user who has never added a car sees a friendly dialog that takes
+    // them straight to the car selector instead of a cryptic error.
+    final vehicleState = ref.read(vehicleProvider).value;
+    final hasVehicle = vehicleState != null && vehicleState.vehicles.isNotEmpty;
+    if (!hasVehicle) {
+      await _showNoVehicleDialog(context, ref);
+      return;
+    }
+
     final destination = ref.read(destinationProvider);
     final error = await notifier.startDrive(destination: destination);
 
@@ -152,6 +164,41 @@ class StartDriveButton extends ConsumerWidget {
         ),
       );
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // No-vehicle dialog
+  // ---------------------------------------------------------------------------
+
+  /// Shows a dialog explaining that a vehicle must be added before starting
+  /// a drive.  The "Add Car" button opens the car selector sheet directly so
+  /// the user can add their first vehicle without leaving the map screen.
+  Future<void> _showNoVehicleDialog(BuildContext context, WidgetRef ref) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('No Car Selected'),
+        content: const Text(
+          'You need to add a car before you can start a drive.\n\n'
+          'Tap "Add Car" to add your first vehicle, then come back '
+          'and start your drive.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              // Signal MainNavigation to open the car selector sheet.
+              ref.read(openCarSheetProvider.notifier).request();
+            },
+            child: const Text('Add Car'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
