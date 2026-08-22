@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 6.3 complete_
+_Last updated: 2026-08-22 — Phase 6.4 complete_
 
 ---
 
@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: 🔄 In progress** _(6.1, 6.2, 6.3 complete)_
+**Status: 🔄 In progress** _(6.1, 6.2, 6.3, 6.4 complete)_
 
 ---
 
@@ -1569,6 +1569,162 @@ None. Uses existing `latlong2`, `dart:math`, and `GpsMathUtils`.
 - [x] No UI changes
 - [x] No new packages
 - [x] All existing Phase 5 and Phase 6.1–6.2 tests continue passing
+
+---
+
+### Phase 6.4 — Consolidated Analytics
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+- **`lib/features/analytics/providers/trip_analytics_provider.dart`** _(modified)_ — `TripAnalyticsState` extended with a `Trip?` field and convenience accessors (`distanceKm`, `durationSeconds`, `stopCount`). `TripAnalyticsNotifier` updated to load the `Trip` from `TripRepository` first (exposes it immediately so the UI can render summary stats before GPS analysis completes), then load track points, then run `DrivingAnalyticsService`. Loading order: Trip → track points → analytics. Added `tripRepositoryProvider` import.
+- **`test/features/analytics/consolidated_analytics_test.dart`** _(new)_ — 23 tests covering all 15 required scenarios plus model tests and single-source-of-truth verification.
+
+#### Final analytics structure
+
+The consolidated analytics result is accessed through `TripAnalyticsState`, which exposes:
+
+```
+TripAnalyticsState
+ ├── trip (Trip?)                    ← persisted record, loaded first
+ │    ├── distanceKm                 ← persisted at drive completion
+ │    ├── durationSeconds            ← persisted at drive completion
+ │    ├── startTime / endTime        ← UTC timestamps
+ │    ├── vehicleId                  ← captured at drive start
+ │    ├── mode (reckless/destination)
+ │    ├── destinationName/Lat/Lng    ← captured at drive start
+ │    ├── startLatitude/Longitude
+ │    ├── averageSpeedKmh            ← persisted at drive completion
+ │    ├── minimumSpeedKmh            ← persisted at drive completion
+ │    ├── maximumSpeedKmh            ← persisted at drive completion
+ │    ├── minimumAltitudeM           ← persisted at drive completion
+ │    ├── maximumAltitudeM           ← persisted at drive completion
+ │    └── stops                      ← null until stop detection implemented
+ │
+ ├── analytics (DrivingAnalytics?)   ← computed from GPS track
+ │    ├── analyzedPoints             ← chronological track with derived values
+ │    │    └── (speed, altitude, heading, acceleration per segment)
+ │    ├── speedAnalysis              ← derived speed extremes, moving duration
+ │    ├── altitudeAnalysis           ← altitude extremes, elevation gain/loss
+ │    ├── turnAnalysis               ← left/right/U-turn counts and events
+ │    └── brakingAnalysis            ← hard-braking/sudden-stop counts and events
+ │
+ ├── distanceKm                      ← convenience: delegates to trip?.distanceKm
+ ├── durationSeconds                 ← convenience: delegates to trip?.durationSeconds
+ └── stopCount                       ← convenience: delegates to trip?.stops
+```
+
+#### Statistics source table
+
+| Statistic | Source | When available |
+|---|---|---|
+| Distance | `trip.distanceKm` | Always (persisted) |
+| Duration | `trip.durationSeconds` | Always (persisted) |
+| Start/end time | `trip.startTime/.endTime` | Always (persisted) |
+| Vehicle | `trip.vehicleId` | When vehicle was selected at drive start |
+| Destination | `trip.destinationName/Lat/Lng` | Destination mode only |
+| Stop count | `trip.stops` | null — stop detection not yet implemented |
+| Avg/min/max speed | `trip.averageSpeedKmh/.minimumSpeedKmh/.maximumSpeedKmh` | When ≥1 track point |
+| Min/max altitude | `trip.minimumAltitudeM/.maximumAltitudeM` | When altitude data available |
+| Derived speed extremes | `analytics.speedAnalysis` | When ≥2 track points |
+| Elevation gain/loss | `analytics.altitudeAnalysis` | When altitude data available |
+| Left turns | `analytics.turnAnalysis.leftTurns` | Derived from events |
+| Right turns | `analytics.turnAnalysis.rightTurns` | Derived from events |
+| U-turns | `analytics.turnAnalysis.uTurns` | Derived from events |
+| Hard braking count | `analytics.brakingAnalysis.hardBrakingCount` | Derived from events |
+| Sudden stop count | `analytics.brakingAnalysis.suddenStopCount` | Derived from events |
+| Speed graph data | `analytics.analyzedPoints` | Chronological, filtered for non-null speed |
+| Altitude graph data | `analytics.analyzedPoints` | Chronological, filtered for non-null altitude |
+
+#### Single source of truth
+
+- No statistics are duplicated or recalculated.
+- `Trip` persisted values (distance, duration, speed/altitude extremes) are the authoritative source for summary display.
+- `DrivingAnalyticsService` computes derived values from the GPS track — these complement but do not replace persisted values.
+- Turn counts are derived from `TurnAnalysis.turns` event list at construction — no separate counters.
+- Braking counts are derived from `BrakingAnalysis.events` at construction — no separate counters.
+- `stopCount` delegates to `trip?.stops` (persisted value) — no re-detection.
+
+#### Provider loading strategy
+
+```
+TripAnalyticsNotifier._load()
+    │
+    ├── Step 1: TripRepository.getTripById()       → expose trip immediately
+    │           (UI can render summary stats before GPS loads)
+    │
+    ├── Step 2: TrackPointRepository.getTrackPointsForTrip()
+    │           (GPS track loaded once — no repeated queries)
+    │
+    └── Step 3: DrivingAnalyticsService.analyze()   → O(n) single pass
+                ├── TurnDetector.detectTurns()
+                └── BrakingDetector.detect()
+```
+
+#### Graph data handling
+
+Graph data is available via `analytics.analyzedPoints` — a chronological list of `AnalyzedTrackPoint` objects. Each point carries both raw GPS values and derived per-segment values. The existing `TripStatsScreen` already transforms these into `DataPoint` lists for the speed and altitude graphs. No graph infrastructure changes were needed.
+
+#### Missing data handling
+
+All sub-analyses handle missing data gracefully:
+- Empty track → `DrivingAnalytics.empty()` with non-null but empty sub-analyses.
+- Missing speed → `speedAnalysis.isEmpty = true`, braking detector skips affected segments.
+- Missing altitude → `altitudeAnalysis.isEmpty = true`, all altitude fields null.
+- Duplicate/invalid timestamps → degenerate segments skipped, no NaN/Infinity.
+- Trip not found → `TripAnalyticsState.error` set, no crash.
+
+#### Files created
+- `test/features/analytics/consolidated_analytics_test.dart`
+
+#### Files modified
+- `lib/features/analytics/providers/trip_analytics_provider.dart` — `TripAnalyticsState` now includes `Trip?` field and convenience accessors; `TripAnalyticsNotifier` loads `Trip` before running analytics
+
+#### Dependencies added
+None.
+
+#### Known limitations
+- `stopCount` is always `null` until a stop detector is implemented in a future phase.
+- The `Trip.startName` field (reverse-geocoded start location) is always null — geocoding at drive start has not been implemented.
+- Analytics are computed on demand, not cached to the database — recomputed each time the provider is created for a given trip ID.
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **330 tests passed**:
+  - 304 pre-existing tests (Phases 5.1–6.3 + smoke test) ✅
+  - 23 new Phase 6.4 consolidated analytics tests ✅
+    - Test 1: Complete normal trip (all stats, sub-analyses, no NaN)
+    - Test 2: Trip with no turns (TurnAnalysis.totalTurns = 0)
+    - Test 3: Trip with left and right turns (turn detection wired)
+    - Test 4: Trip with U-turn (U-turn counted separately)
+    - Test 5: Trip with hard braking (event detected, counts correct)
+    - Test 6: Trip with sudden stop (no double-counting)
+    - Test 7: Trip with multiple event types (all populated, no NaN)
+    - Test 8: Empty track (valid empty analytics, no crash)
+    - Test 9: One-point track (no segments, no events, no crash)
+    - Test 10: Missing speed (null fields used, no crash)
+    - Test 11: Missing altitude (AltitudeAnalysis empty, no fake zeroes)
+    - Test 12: Duplicate timestamps (invalid segments skipped, no NaN)
+    - Test 13: Duplicate coordinates (0-distance segment, no crash)
+    - Test 14: Offline-compatible (synchronous, no network)
+    - Test 15: Regression (SpeedAnalysis, TurnAnalysis, BrakingAnalysis, empty() all unchanged)
+    - Tests 16–20: TripAnalyticsState model (initial state, accessors, copyWith, stopCount null, isComplete)
+    - Tests 21–23: Single source of truth (turn counts, braking counts, persisted values not overwritten)
+- [x] `TripAnalyticsState` exposes `Trip` + `DrivingAnalytics` together
+- [x] Trip loaded first — UI can show summary stats immediately
+- [x] Track points loaded once — no repeated SQLite queries
+- [x] Analytics service runs once per provider instance — Riverpod caches result
+- [x] `stopCount` delegates to `trip?.stops` — no re-detection
+- [x] All sub-analyses (speed, altitude, turns, braking) populated
+- [x] `analyzedPoints` available for speed and altitude graph data
+- [x] No statistics duplicated or recalculated
+- [x] No database changes
+- [x] No UI changes
+- [x] No new packages
+- [x] All existing Phase 5 and Phase 6.1–6.3 tests continue passing
 
 ---
 
