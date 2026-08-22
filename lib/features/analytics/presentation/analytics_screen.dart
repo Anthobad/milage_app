@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
+import '../../../core/services/unit_service.dart';
 import '../../cars/models/vehicle.dart';
 import '../../cars/providers/vehicle_provider.dart';
 import '../../trips/presentation/widgets/interactive_graph.dart';
@@ -212,23 +213,24 @@ class _AnalyticsHeader extends StatelessWidget {
 // _DashboardBody — all stats sections
 // ---------------------------------------------------------------------------
 
-class _DashboardBody extends StatelessWidget {
+class _DashboardBody extends ConsumerWidget {
   const _DashboardBody({required this.analytics});
   final OverallDrivingAnalytics analytics;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unitService = ref.watch(unitServiceProvider);
     final pts = analytics.tripDataPoints;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // 1. Overview
-        _OverviewCard(analytics: analytics),
+        _OverviewCard(analytics: analytics, unitService: unitService),
         const SizedBox(height: AppSpacing.md),
 
         // 2. Driving stats
-        _DrivingStatsCard(analytics: analytics),
+        _DrivingStatsCard(analytics: analytics, unitService: unitService),
         const SizedBox(height: AppSpacing.md),
 
         // 3. Driving events (turns + braking) — only if data exists
@@ -239,7 +241,7 @@ class _DashboardBody extends StatelessWidget {
 
         // 4. Altitude — only if data exists
         if (_hasAltitudeData()) ...[
-          _AltitudeCard(analytics: analytics),
+          _AltitudeCard(analytics: analytics, unitService: unitService),
           const SizedBox(height: AppSpacing.md),
         ],
 
@@ -248,8 +250,8 @@ class _DashboardBody extends StatelessWidget {
           _TrendGraphCard(
             title: 'Distance per trip',
             icon: Icons.straighten_rounded,
-            dataPoints: _distancePoints(pts),
-            yUnit: 'km',
+            dataPoints: _distancePoints(pts, unitService),
+            yUnit: unitService.distanceUnit,
             lineColor: AppColors.primaryLight,
             tripDataPoints: pts,
           ),
@@ -261,8 +263,8 @@ class _DashboardBody extends StatelessWidget {
           _TrendGraphCard(
             title: 'Average speed per trip',
             icon: Icons.speed_rounded,
-            dataPoints: _avgSpeedPoints(pts),
-            yUnit: 'km/h',
+            dataPoints: _avgSpeedPoints(pts, unitService),
+            yUnit: unitService.speedUnit,
             lineColor: AppColors.success,
             fillColor: AppColors.success.withValues(alpha: 0.15),
             tripDataPoints: pts,
@@ -275,8 +277,8 @@ class _DashboardBody extends StatelessWidget {
           _TrendGraphCard(
             title: 'Top speed per trip',
             icon: Icons.arrow_upward_rounded,
-            dataPoints: _maxSpeedPoints(pts),
-            yUnit: 'km/h',
+            dataPoints: _maxSpeedPoints(pts, unitService),
+            yUnit: unitService.speedUnit,
             lineColor: AppColors.warning,
             fillColor: AppColors.warning.withValues(alpha: 0.12),
             tripDataPoints: pts,
@@ -306,32 +308,46 @@ class _DashboardBody extends StatelessWidget {
       pts.length >= 2 &&
       pts.any((p) => p.maximumSpeedKmh != null && p.maximumSpeedKmh!.isFinite);
 
-  List<DataPoint> _distancePoints(List<TripDataPoint> pts) {
+  List<DataPoint> _distancePoints(
+      List<TripDataPoint> pts, UnitService unitService) {
     final result = <DataPoint>[];
     for (int i = 0; i < pts.length; i++) {
       final v = pts[i].distanceKm;
-      if (v.isFinite) result.add(DataPoint(timeSeconds: i.toDouble(), value: v));
-    }
-    return result;
-  }
-
-  List<DataPoint> _avgSpeedPoints(List<TripDataPoint> pts) {
-    final result = <DataPoint>[];
-    for (int i = 0; i < pts.length; i++) {
-      final v = pts[i].averageSpeedKmh;
-      if (v != null && v.isFinite) {
-        result.add(DataPoint(timeSeconds: i.toDouble(), value: v));
+      if (v.isFinite) {
+        result.add(DataPoint(
+          timeSeconds: i.toDouble(),
+          value: unitService.convertDistance(v),
+        ));
       }
     }
     return result;
   }
 
-  List<DataPoint> _maxSpeedPoints(List<TripDataPoint> pts) {
+  List<DataPoint> _avgSpeedPoints(
+      List<TripDataPoint> pts, UnitService unitService) {
+    final result = <DataPoint>[];
+    for (int i = 0; i < pts.length; i++) {
+      final v = pts[i].averageSpeedKmh;
+      if (v != null && v.isFinite) {
+        result.add(DataPoint(
+          timeSeconds: i.toDouble(),
+          value: unitService.convertSpeed(v),
+        ));
+      }
+    }
+    return result;
+  }
+
+  List<DataPoint> _maxSpeedPoints(
+      List<TripDataPoint> pts, UnitService unitService) {
     final result = <DataPoint>[];
     for (int i = 0; i < pts.length; i++) {
       final v = pts[i].maximumSpeedKmh;
       if (v != null && v.isFinite) {
-        result.add(DataPoint(timeSeconds: i.toDouble(), value: v));
+        result.add(DataPoint(
+          timeSeconds: i.toDouble(),
+          value: unitService.convertSpeed(v),
+        ));
       }
     }
     return result;
@@ -343,8 +359,9 @@ class _DashboardBody extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _OverviewCard extends StatelessWidget {
-  const _OverviewCard({required this.analytics});
+  const _OverviewCard({required this.analytics, required this.unitService});
   final OverallDrivingAnalytics analytics;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -364,7 +381,7 @@ class _OverviewCard extends StatelessWidget {
               _StatCell(
                   icon: Icons.straighten_rounded,
                   label: 'Distance',
-                  value: analytics.totalDistanceLabel),
+                  value: unitService.formatDistance(analytics.totalDistanceKm)),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -380,7 +397,7 @@ class _OverviewCard extends StatelessWidget {
               _StatCell(
                   icon: Icons.trending_flat_rounded,
                   label: 'Avg speed',
-                  value: _fmtSpeed(analytics.averageSpeedKmh),
+                  value: unitService.formatSpeedOrDash(analytics.averageSpeedKmh),
                   valueColor: analytics.averageSpeedKmh != null
                       ? AppColors.success
                       : null),
@@ -388,7 +405,7 @@ class _OverviewCard extends StatelessWidget {
               _StatCell(
                   icon: Icons.arrow_upward_rounded,
                   label: 'Top speed',
-                  value: _fmtSpeed(analytics.maximumSpeedKmh),
+                  value: unitService.formatSpeedOrDash(analytics.maximumSpeedKmh),
                   valueColor: analytics.maximumSpeedKmh != null
                       ? AppColors.warning
                       : null),
@@ -398,9 +415,6 @@ class _OverviewCard extends StatelessWidget {
       ),
     );
   }
-
-  String _fmtSpeed(double? v) =>
-      (v != null && v.isFinite) ? '${v.toStringAsFixed(0)} km/h' : '—';
 }
 
 // ---------------------------------------------------------------------------
@@ -408,8 +422,9 @@ class _OverviewCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _DrivingStatsCard extends StatelessWidget {
-  const _DrivingStatsCard({required this.analytics});
+  const _DrivingStatsCard({required this.analytics, required this.unitService});
   final OverallDrivingAnalytics analytics;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -425,17 +440,17 @@ class _DrivingStatsCard extends StatelessWidget {
               _StatCell(
                   icon: Icons.trending_flat_rounded,
                   label: 'Avg speed',
-                  value: _fmtSpeed(analytics.averageSpeedKmh)),
+                  value: unitService.formatSpeedOrDash(analytics.averageSpeedKmh)),
               const _VDivider(),
               _StatCell(
                   icon: Icons.arrow_downward_rounded,
                   label: 'Min speed',
-                  value: _fmtSpeed(analytics.minimumSpeedKmh)),
+                  value: unitService.formatSpeedOrDash(analytics.minimumSpeedKmh)),
               const _VDivider(),
               _StatCell(
                   icon: Icons.arrow_upward_rounded,
                   label: 'Max speed',
-                  value: _fmtSpeed(analytics.maximumSpeedKmh)),
+                  value: unitService.formatSpeedOrDash(analytics.maximumSpeedKmh)),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -460,9 +475,6 @@ class _DrivingStatsCard extends StatelessWidget {
       ),
     );
   }
-
-  String _fmtSpeed(double? v) =>
-      (v != null && v.isFinite) ? '${v.toStringAsFixed(0)} km/h' : '—';
 
   String _fmtMoving(double? v) {
     if (v == null || !v.isFinite) return '—';
@@ -571,8 +583,9 @@ class _EventsCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _AltitudeCard extends StatelessWidget {
-  const _AltitudeCard({required this.analytics});
+  const _AltitudeCard({required this.analytics, required this.unitService});
   final OverallDrivingAnalytics analytics;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -590,12 +603,12 @@ class _AltitudeCard extends StatelessWidget {
               _StatCell(
                   icon: Icons.arrow_downward_rounded,
                   label: 'Min altitude',
-                  value: _fmtAlt(analytics.minimumAltitudeM)),
+                  value: unitService.formatAltitudeOrDash(analytics.minimumAltitudeM)),
               const _VDivider(),
               _StatCell(
                   icon: Icons.arrow_upward_rounded,
                   label: 'Max altitude',
-                  value: _fmtAlt(analytics.maximumAltitudeM)),
+                  value: unitService.formatAltitudeOrDash(analytics.maximumAltitudeM)),
             ],
           ),
           if (hasGainLoss) ...[
@@ -607,14 +620,14 @@ class _AltitudeCard extends StatelessWidget {
                 _StatCell(
                   icon: Icons.trending_up_rounded,
                   label: 'Elevation gain',
-                  value: _fmtAlt(analytics.totalElevationGainM),
+                  value: unitService.formatElevationOrDash(analytics.totalElevationGainM),
                   valueColor: AppColors.success,
                 ),
                 const _VDivider(),
                 _StatCell(
                   icon: Icons.trending_down_rounded,
                   label: 'Elevation loss',
-                  value: _fmtAlt(analytics.totalElevationLossM),
+                  value: unitService.formatElevationOrDash(analytics.totalElevationLossM),
                   valueColor: AppColors.warning,
                 ),
               ],
@@ -624,9 +637,6 @@ class _AltitudeCard extends StatelessWidget {
       ),
     );
   }
-
-  String _fmtAlt(double? v) =>
-      (v != null && v.isFinite) ? '${v.toStringAsFixed(0)} m' : '—';
 }
 
 // ---------------------------------------------------------------------------

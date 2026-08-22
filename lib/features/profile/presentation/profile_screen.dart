@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
+import '../../../core/services/unit_service.dart';
 import '../providers/profile_driving_summary_provider.dart';
 import '../providers/profile_image_provider.dart';
 
@@ -215,6 +216,7 @@ class _DrivingSummaryCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(profileDrivingSummaryProvider);
+    final unitService = ref.watch(unitServiceProvider);
 
     return Container(
       key: const Key('driving_summary_card'),
@@ -252,6 +254,7 @@ class _DrivingSummaryCard extends ConsumerWidget {
                 )
               : _DrivingStatRow(
                   summary: state.summary ?? ProfileDrivingSummary.zero,
+                  unitService: unitService,
                 ),
         ],
       ),
@@ -260,8 +263,9 @@ class _DrivingSummaryCard extends ConsumerWidget {
 }
 
 class _DrivingStatRow extends StatelessWidget {
-  const _DrivingStatRow({required this.summary});
+  const _DrivingStatRow({required this.summary, required this.unitService});
   final ProfileDrivingSummary summary;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -276,7 +280,7 @@ class _DrivingStatRow extends StatelessWidget {
         Expanded(
           child: _StatCell(
             label: 'Distance',
-            value: summary.distanceLabel,
+            value: unitService.formatDistance(summary.totalDistanceKm),
           ),
         ),
         Expanded(

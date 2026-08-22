@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 7.3 complete_
+_Last updated: 2026-08-22 — Phase 7.4 complete_
 
 ---
 
@@ -2313,7 +2313,7 @@ None. Uses existing `flutter_riverpod`, `go_router`, and internal repositories/s
 
 ## Phase 7 — Profile & Settings
 
-**Status: 🔄 In Progress** _(Phase 7.1, 7.2, 7.3 complete)_
+**Status: 🔄 In Progress** _(Phase 7.1, 7.2, 7.3, 7.4 complete)_
 
 ---
 
@@ -2720,6 +2720,158 @@ Unit tests (16):
 
 #### Deferred work
 - Units settings (future Phase 7 task)
+- Permissions settings (future Phase 7 task)
+- About TripRank content (future Phase 7 task)
+
+---
+
+### Phase 7.4 — Units Settings
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+Implemented the dedicated Units settings page and verified all user-facing displays respect the unit preference.
+
+- **`lib/features/profile/providers/unit_preference_provider.dart`** _(new)_ — `UnitSystem` enum (`metric`, `imperial`). `UnitPreferenceNotifier` (`AsyncNotifier<UnitSystem>`). `build()` reads the persisted value from SharedPreferences (key: `'unit_system'`) on cold start. `setUnitSystem(UnitSystem)` updates state optimistically then persists. Default (absent key): `UnitSystem.metric`. `kUnitSystemPreferenceKey = 'unit_system'` constant exported.
+- **`lib/core/services/unit_service.dart`** _(new)_ — `UnitService` class accepting a `UnitSystem`. Provides `formatDistance(km)`, `formatSpeed(kmh)`, `formatAltitude(m)`, `formatElevation(m)`, `formatSpeedOrDash`, `formatAltitudeOrDash`, `formatElevationOrDash`, `convertDistance`, `convertSpeed`, `convertAltitude`, `distanceUnit`, `speedUnit`, `altitudeUnit`. All methods guard against NaN/Infinity (returns `"—"`). `unitServiceProvider` (`Provider<UnitService>`) reads `unitPreferenceProvider` and reconstructs when it changes.
+- **`lib/features/profile/presentation/units_screen.dart`** _(new)_ — `UnitsScreen` `ConsumerWidget`. Two options: Metric (🌍, km/km·h/m) and Imperial (🇺🇸, mi/mph/ft). Active option shows blue checkmark. Same rounded-card style as Appearance and Map Appearance pages. Reads `unitPreferenceProvider`, writes via `setUnitSystem`. Does NOT access SharedPreferences directly.
+- **`lib/features/map/presentation/widgets/map_info_bar.dart`** _(modified)_ — Converted to `ConsumerWidget`. Reads both `driveProvider` and `unitServiceProvider`. Speed, altitude, and distance values formatted via `unitService.formatSpeed`, `formatAltitude`, `formatDistance` respectively. No hardcoded unit strings in the widget.
+- **`lib/features/analytics/presentation/analytics_screen.dart`** _(modified)_ — Removed duplicate `flutter/material.dart` import. `_DrivingStatsCard` and `_AltitudeCard` now accept a `UnitService` parameter and use `unitService.formatSpeedOrDash` / `formatAltitudeOrDash` / `formatElevationOrDash` instead of private `_fmtSpeed` and `_fmtAlt` methods that hardcoded `km/h` and `m`.
+- **`lib/features/profile/presentation/profile_screen.dart`** _(existing, confirmed)_ — `_DrivingStatRow` already passes `unitService.formatDistance(summary.totalDistanceKm)` for the all-vehicle driving summary.
+- **`lib/features/trips/presentation/widgets/trip_card.dart`** _(existing, confirmed)_ — Already uses `unitServiceProvider` for `formatSpeed` and `formatDistance`.
+- **`lib/features/trips/presentation/trip_stats_screen.dart`** _(existing, confirmed)_ — Already uses `unitServiceProvider` throughout (distance, speed, altitude stats cards; speed and altitude graphs via `convertSpeed`/`convertAltitude`; elevation via `formatElevation`).
+- **`lib/app/router.dart`** _(existing, confirmed)_ — `AppRoutes.profileUnits = '/profile/settings/units'` route already wired to `UnitsScreen()`.
+- **`test/features/profile/units_settings_test.dart`** _(new)_ — 62 tests covering all 25 spec scenarios, conversion accuracy tests, and `UnitPreferenceNotifier` / `unitServiceProvider` unit tests.
+
+#### Supported unit systems
+
+| System | Distance | Speed | Altitude |
+|---|---|---|---|
+| Metric (default) | km | km/h | m |
+| Imperial | mi | mph | ft |
+
+#### Canonical internal units
+
+All trip data, GPS records, analytics calculations, and SQLite values remain in canonical units:
+
+| Measurement | Internal unit |
+|---|---|
+| Distance | kilometres (km) |
+| Speed | kilometres per hour (km/h) |
+| Altitude | metres (m) |
+| Duration | seconds (unchanged — no metric/imperial) |
+
+The `UnitSystem` setting is **display-only**. No database migrations, no trip model changes, no GPS calculation changes.
+
+#### Display conversion rules
+
+Standard conversion constants:
+- `1 km = 0.621371 mi` (`kKmToMiles`)
+- `1 m = 3.28084 ft` (`kMetresToFeet`)
+- Speed uses the same factor as distance (km/h → mph)
+
+Convert first, then format. No rounding applied to internal values.
+
+Formatting examples:
+
+| Metric | Imperial |
+|---|---|
+| `12.4 km` | `7.7 mi` |
+| `84 km/h` | `52.2 mph` |
+| `412 m` | `1352 ft` |
+| `0.85 km` → `850 m` | `0.5 mi` |
+
+#### Persistence mechanism
+
+- Package: `shared_preferences ^2.5.5` (existing project dependency)
+- Key: `'unit_system'`
+- Stored values: `'metric'` | `'imperial'`
+- Default (absent key): `UnitSystem.metric`
+- Survives: widget rebuilds, navigation, app close/reopen, phone restart
+- NOT stored in SQLite — correct for an app preference
+
+#### Provider / service architecture
+
+```
+UnitsScreen (UI)
+      ↓
+unitPreferenceProvider.notifier.setUnitSystem(UnitSystem)
+      ↓
+UnitPreferenceNotifier (AsyncNotifier<UnitSystem>)
+      ├── build() → SharedPreferences.getString('unit_system') → UnitSystem
+      └── setUnitSystem() → state = AsyncData(system) → prefs.setString(...)
+
+unitServiceProvider (Provider<UnitService>)
+      ↓
+ref.watch(unitPreferenceProvider).value ?? UnitSystem.metric
+      ↓
+UnitService(system)
+
+Widgets that display measurements:
+      ↓
+ref.watch(unitServiceProvider)
+      ↓
+unitService.formatDistance / formatSpeed / formatAltitude / ...
+```
+
+Single authoritative source — no duplicate unit conversion logic in widgets.
+
+#### Screens updated (verified using `unitServiceProvider`)
+
+| Screen / widget | Unit values |
+|---|---|
+| `MapInfoBar` (map screen) | Speed, altitude, distance during active drive |
+| `TripCard` (trips list) | Avg speed, distance per trip |
+| `TripStatsScreen` (trip details) | Distance, speed stats, altitude stats, elevation, speed graph, altitude graph |
+| `AnalyticsScreen` (overall analytics) | Distance, speed stats, altitude stats, elevation, trend graph axes |
+| `ProfileScreen` (driving summary) | Total distance (all-vehicle) |
+
+#### Navigation
+
+```
+Profile page
+    └── Units row → context.push(AppRoutes.profileUnits)
+            ↓
+        UnitsScreen  (/profile/settings/units)
+            └── AppBar back button → returns to Profile
+```
+
+#### Tests (62 total)
+
+| Group | Tests |
+|---|---|
+| Units Settings UI | 1–11 (render, options, default, select, checkmark, only-one, persist, restore, navigation) |
+| UnitService Formatting | 12–24 (distance/speed/altitude units per system, trip data, canonical values, graph units, driving summary, NaN/Infinity safety) |
+| Conversion Accuracy | C1–C16 (100 km → 62.1371 mi, 100 km/h → 62.1371 mph, 100 m → 328.084 ft, zero values, metric pass-through, formatting examples) |
+| UnitPreferenceNotifier | Provider unit tests (default, set, serialisation, fallback) |
+| unitServiceProvider | Integration tests (rebuilds on system change) |
+| UnitService unit labels | distanceUnit / speedUnit / altitudeUnit accessors |
+| Elevation formatting | formatElevation / formatElevationOrDash |
+
+#### Verification results
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found**
+- `flutter test` → **617 tests passed** (539 pre-existing + 62 new Phase 7.4 tests, `test/features/profile/units_settings_test.dart` added as the 19th test file)
+- No regressions introduced
+
+#### Files created
+- `lib/features/profile/providers/unit_preference_provider.dart`
+- `lib/core/services/unit_service.dart`
+- `lib/features/profile/presentation/units_screen.dart`
+- `test/features/profile/units_settings_test.dart`
+
+#### Files modified
+- `lib/features/map/presentation/widgets/map_info_bar.dart` — uses `unitServiceProvider` (no hardcoded units)
+- `lib/features/analytics/presentation/analytics_screen.dart` — duplicate import removed; `_DrivingStatsCard` / `_AltitudeCard` accept `unitService` parameter
+- `lib/core/services/unit_service.dart` — import path corrected
+
+#### Default behavior
+
+Unit preference is `UnitSystem.metric` when no saved preference exists. This preserves the existing TripRank behavior — all displays continue to show km, km/h, and m for users who have not explicitly changed the setting.
+
+#### Deferred work
 - Permissions settings (future Phase 7 task)
 - About TripRank content (future Phase 7 task)
 

@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/colors.dart';
 import '../../../app/theme/spacing.dart';
+import '../../../core/services/unit_service.dart';
 import '../../analytics/models/altitude_analysis.dart';
 import '../../analytics/models/analyzed_track_point.dart';
 import '../../analytics/models/braking_analysis.dart';
@@ -111,13 +112,14 @@ class TripStatsScreen extends ConsumerWidget {
 
     // Derive graph data from analyzedPoints — no GPS math in the widget.
     final analyzedPoints = analytics?.analyzedPoints ?? const [];
-    final speedPoints = _toSpeedPoints(analyzedPoints, trip.startTime);
-    final altitudePoints = _toAltitudePoints(analyzedPoints, trip.startTime);
 
     // Route polyline from analyzedPoints.
     final polylineLatLngs = analyzedPoints
         .map((p) => LatLng(p.latitude, p.longitude))
         .toList();
+
+    // Unit service — provides unit-aware formatting for all displays.
+    final unitService = ref.watch(unitServiceProvider);
 
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -143,18 +145,18 @@ class TripStatsScreen extends ConsumerWidget {
           const SizedBox(height: AppSpacing.md),
 
           // ── 3. Main stats ─────────────────────────────────────────────────
-          _CoreStatsCard(trip: trip, ref: ref),
+          _CoreStatsCard(trip: trip, ref: ref, unitService: unitService),
           const SizedBox(height: AppSpacing.md),
 
           // ── 4. Speed stats ────────────────────────────────────────────────
           if (trip.averageSpeedKmh != null) ...[
-            _SpeedStatsCard(trip: trip),
+            _SpeedStatsCard(trip: trip, unitService: unitService),
             const SizedBox(height: AppSpacing.md),
           ],
 
           // ── 5. Altitude stats ─────────────────────────────────────────────
           if (trip.minimumAltitudeM != null) ...[
-            _AltitudeStatsCard(trip: trip),
+            _AltitudeStatsCard(trip: trip, unitService: unitService),
             const SizedBox(height: AppSpacing.md),
           ],
 
@@ -162,12 +164,13 @@ class TripStatsScreen extends ConsumerWidget {
           _GraphCard(
             title: 'Speed over time',
             isLoading: state.isLoading,
-            child: speedPoints.isEmpty && !state.isLoading
+            child: _toSpeedPoints(analyzedPoints, trip.startTime, unitService).isEmpty && !state.isLoading
                 ? const _NoDataLabel(label: 'No speed data recorded.')
                 : InteractiveGraph(
-                    dataPoints: speedPoints,
+                    dataPoints: _toSpeedPoints(
+                        analyzedPoints, trip.startTime, unitService),
                     title: 'Speed',
-                    yUnit: 'km/h',
+                    yUnit: unitService.speedUnit,
                     lineColor: AppColors.primaryLight,
                   ),
           ),
@@ -177,12 +180,13 @@ class TripStatsScreen extends ConsumerWidget {
           _GraphCard(
             title: 'Altitude over time',
             isLoading: state.isLoading,
-            child: altitudePoints.isEmpty && !state.isLoading
+            child: _toAltitudePoints(analyzedPoints, trip.startTime, unitService).isEmpty && !state.isLoading
                 ? const _NoDataLabel(label: 'No altitude data recorded.')
                 : InteractiveGraph(
-                    dataPoints: altitudePoints,
+                    dataPoints: _toAltitudePoints(
+                        analyzedPoints, trip.startTime, unitService),
                     title: 'Altitude',
-                    yUnit: 'm',
+                    yUnit: unitService.altitudeUnit,
                     lineColor: AppColors.success,
                     fillColor: AppColors.success.withValues(alpha: 0.15),
                   ),
@@ -195,6 +199,7 @@ class TripStatsScreen extends ConsumerWidget {
             altitudeAnalysis: analytics?.altitudeAnalysis,
             turnAnalysis: analytics?.turnAnalysis,
             isLoading: state.isLoading,
+            unitService: unitService,
           ),
           const SizedBox(height: AppSpacing.md),
 
@@ -223,12 +228,15 @@ class TripStatsScreen extends ConsumerWidget {
 
   // ── Data helpers — convert analyzedPoints to DataPoints ───────────────────
 
-  /// Convert analyzed points to speed DataPoints.
+  /// Convert analyzed points to speed DataPoints using [unitService].
   ///
   /// Uses [AnalyzedTrackPoint.bestSpeedKmh] (raw GPS preferred, derived
   /// fallback).  X-axis = elapsed seconds from [tripStart].
+  /// Values are converted to the display unit before graphing.
   static List<DataPoint> _toSpeedPoints(
-      List<AnalyzedTrackPoint> pts, DateTime tripStart) {
+      List<AnalyzedTrackPoint> pts,
+      DateTime tripStart,
+      UnitService unitService) {
     if (pts.isEmpty) return const [];
     final result = <DataPoint>[];
     for (final p in pts) {
@@ -237,17 +245,23 @@ class TripStatsScreen extends ConsumerWidget {
       final elapsed =
           p.timestamp.difference(tripStart).inMilliseconds / 1000.0;
       if (elapsed < 0) continue;
-      result.add(DataPoint(timeSeconds: elapsed, value: speed));
+      // Convert km/h to display unit.
+      final displaySpeed = unitService.convertSpeed(speed);
+      if (displaySpeed.isNaN || displaySpeed.isInfinite) continue;
+      result.add(DataPoint(timeSeconds: elapsed, value: displaySpeed));
     }
     return result;
   }
 
-  /// Convert analyzed points to altitude DataPoints.
+  /// Convert analyzed points to altitude DataPoints using [unitService].
   ///
   /// Only points with non-null altitude are included.
   /// X-axis = elapsed seconds from [tripStart].
+  /// Values are converted to the display unit before graphing.
   static List<DataPoint> _toAltitudePoints(
-      List<AnalyzedTrackPoint> pts, DateTime tripStart) {
+      List<AnalyzedTrackPoint> pts,
+      DateTime tripStart,
+      UnitService unitService) {
     if (pts.isEmpty) return const [];
     final result = <DataPoint>[];
     for (final p in pts) {
@@ -256,7 +270,10 @@ class TripStatsScreen extends ConsumerWidget {
       final elapsed =
           p.timestamp.difference(tripStart).inMilliseconds / 1000.0;
       if (elapsed < 0) continue;
-      result.add(DataPoint(timeSeconds: elapsed, value: alt));
+      // Convert metres to display unit.
+      final displayAlt = unitService.convertAltitude(alt);
+      if (displayAlt.isNaN || displayAlt.isInfinite) continue;
+      result.add(DataPoint(timeSeconds: elapsed, value: displayAlt));
     }
     return result;
   }
@@ -632,9 +649,10 @@ class _RouteMapCardState extends State<_RouteMapCard> {
 
 /// Main statistics card: distance, duration, stops, vehicle.
 class _CoreStatsCard extends StatelessWidget {
-  const _CoreStatsCard({required this.trip, required this.ref});
+  const _CoreStatsCard({required this.trip, required this.ref, required this.unitService});
   final Trip trip;
   final WidgetRef ref;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -665,7 +683,7 @@ class _CoreStatsCard extends StatelessWidget {
               _StatCell(
                 icon: Icons.straighten_rounded,
                 label: 'Distance',
-                value: trip.distanceLabel,
+                value: unitService.formatDistance(trip.distanceKm),
               ),
               const _VDivider(),
               _StatCell(
@@ -718,13 +736,9 @@ class _CoreStatsCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _SpeedStatsCard extends StatelessWidget {
-  const _SpeedStatsCard({required this.trip});
+  const _SpeedStatsCard({required this.trip, required this.unitService});
   final Trip trip;
-
-  String _fmtSpeed(double? v) =>
-      (v != null && !v.isNaN && !v.isInfinite)
-          ? '${v.toStringAsFixed(0)} km/h'
-          : '—';
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -739,19 +753,19 @@ class _SpeedStatsCard extends StatelessWidget {
               _StatCell(
                 icon: Icons.trending_flat_rounded,
                 label: 'Average',
-                value: _fmtSpeed(trip.averageSpeedKmh),
+                value: unitService.formatSpeedOrDash(trip.averageSpeedKmh),
               ),
               const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_downward_rounded,
                 label: 'Minimum',
-                value: _fmtSpeed(trip.minimumSpeedKmh),
+                value: unitService.formatSpeedOrDash(trip.minimumSpeedKmh),
               ),
               const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_upward_rounded,
                 label: 'Maximum',
-                value: _fmtSpeed(trip.maximumSpeedKmh),
+                value: unitService.formatSpeedOrDash(trip.maximumSpeedKmh),
               ),
             ],
           ),
@@ -766,13 +780,9 @@ class _SpeedStatsCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _AltitudeStatsCard extends StatelessWidget {
-  const _AltitudeStatsCard({required this.trip});
+  const _AltitudeStatsCard({required this.trip, required this.unitService});
   final Trip trip;
-
-  String _fmtAlt(double? v) =>
-      (v != null && !v.isNaN && !v.isInfinite)
-          ? '${v.toStringAsFixed(0)} m'
-          : '—';
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -787,13 +797,13 @@ class _AltitudeStatsCard extends StatelessWidget {
               _StatCell(
                 icon: Icons.arrow_downward_rounded,
                 label: 'Minimum',
-                value: _fmtAlt(trip.minimumAltitudeM),
+                value: unitService.formatAltitudeOrDash(trip.minimumAltitudeM),
               ),
               const _VDivider(),
               _StatCell(
                 icon: Icons.arrow_upward_rounded,
                 label: 'Maximum',
-                value: _fmtAlt(trip.maximumAltitudeM),
+                value: unitService.formatAltitudeOrDash(trip.maximumAltitudeM),
               ),
             ],
           ),
@@ -867,12 +877,14 @@ class _AdditionalStatsCard extends StatelessWidget {
     required this.altitudeAnalysis,
     required this.turnAnalysis,
     required this.isLoading,
+    required this.unitService,
   });
 
   final Trip trip;
   final AltitudeAnalysis? altitudeAnalysis;
   final TurnAnalysis? turnAnalysis;
   final bool isLoading;
+  final UnitService unitService;
 
   @override
   Widget build(BuildContext context) {
@@ -892,7 +904,7 @@ class _AdditionalStatsCard extends StatelessWidget {
       rows.add(_InfoRow(
         icon: Icons.trending_up_rounded,
         label: 'Elevation gain',
-        value: '${gain.toStringAsFixed(0)} m',
+        value: unitService.formatElevation(gain),
         valueColor: AppColors.success,
       ));
     }
@@ -903,7 +915,7 @@ class _AdditionalStatsCard extends StatelessWidget {
       rows.add(_InfoRow(
         icon: Icons.trending_down_rounded,
         label: 'Elevation loss',
-        value: '${loss.toStringAsFixed(0)} m',
+        value: unitService.formatElevation(loss),
         valueColor: AppColors.warning,
       ));
     }

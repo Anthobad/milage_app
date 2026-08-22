@@ -9,6 +9,7 @@ import '../features/profile/presentation/appearance_screen.dart';
 import '../features/profile/presentation/map_appearance_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
 import '../features/profile/presentation/settings_screen.dart';
+import '../features/profile/presentation/units_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
 import '../features/trips/presentation/trip_stats_screen.dart';
 import 'main_navigation.dart';
@@ -141,8 +142,7 @@ final GoRouter appRouter = GoRouter(
                 ),
                 GoRoute(
                   path: 'settings/units',
-                  builder: (context, state) =>
-                      const SettingPlaceholderScreen(title: 'Units'),
+                  builder: (context, state) => const UnitsScreen(),
                 ),
                 GoRoute(
                   path: 'settings/permissions',

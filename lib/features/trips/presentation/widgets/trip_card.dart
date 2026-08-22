@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../../app/router.dart';
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../../../../core/services/unit_service.dart';
 import '../../../cars/providers/vehicle_provider.dart';
 import '../../models/trip.dart';
 import '../dialogs/delete_trip_dialog.dart';
@@ -60,10 +61,12 @@ class TripCard extends ConsumerWidget {
     final destLabel =
         isDestMode ? (trip.destinationName ?? 'Unknown destination') : null;
 
-    // Stats.
+    // Stats — use UnitService for unit-aware formatting.
+    final unitService = ref.watch(unitServiceProvider);
     final avgSpeedLabel = trip.averageSpeedKmh != null
-        ? '${trip.averageSpeedKmh!.toStringAsFixed(0)} km/h'
-        : '— km/h';
+        ? unitService.formatSpeed(trip.averageSpeedKmh!)
+        : '—';
+    final distanceLabel = unitService.formatDistance(trip.distanceKm);
 
     return Container(
       decoration: BoxDecoration(
@@ -192,7 +195,7 @@ class TripCard extends ConsumerWidget {
                       _StatsRow(
                         avgSpeed: avgSpeedLabel,
                         duration: trip.durationLabel,
-                        distance: trip.distanceLabel,
+                        distance: distanceLabel,
                       ),
                     ],
                   ),

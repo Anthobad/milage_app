@@ -3,23 +3,41 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/colors.dart';
 import '../../../../app/theme/spacing.dart';
+import '../../../../core/services/unit_service.dart';
 import '../../providers/drive_provider.dart';
 
 /// Minimal floating info bar shown at the bottom of the map.
 ///
 /// When a drive is active, shows live speed, altitude, and distance from
-/// [driveProvider]. Otherwise shows placeholder dashes.
+/// [driveProvider], formatted using [unitServiceProvider] so the values
+/// respect the user's selected unit system (Metric / Imperial).
+///
+/// Otherwise shows placeholder dashes.
+///
+/// UNIT-AWARE: values are formatted via [UnitService] — not hardcoded.
 class MapInfoBar extends ConsumerWidget {
   const MapInfoBar({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final drive = ref.watch(driveProvider);
+    final unitService = ref.watch(unitServiceProvider);
 
     final brightness = Theme.of(context).brightness;
     final Color barColor = brightness == Brightness.dark
         ? AppColors.surfaceDark.withValues(alpha: 0.92)
         : AppColors.surfaceLight.withValues(alpha: 0.92);
+
+    // Build unit-aware labels from live drive state.
+    final speedValue = drive.isDriving
+        ? unitService.formatSpeed(drive.currentSpeedKmh)
+        : '—';
+    final altitudeValue = drive.isDriving
+        ? unitService.formatAltitude(drive.currentAltitudeM)
+        : '—';
+    final distanceValue = drive.isDriving
+        ? _formatLiveDistance(drive.distanceKm, unitService)
+        : '—';
 
     return Container(
       decoration: BoxDecoration(
@@ -40,14 +58,25 @@ class MapInfoBar extends ConsumerWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _InfoItem(label: 'Speed', value: drive.speedLabel),
+          _InfoItem(label: 'Speed', value: speedValue),
           const _Divider(),
-          _InfoItem(label: 'Altitude', value: drive.altitudeLabel),
+          _InfoItem(label: 'Altitude', value: altitudeValue),
           const _Divider(),
-          _InfoItem(label: 'Distance', value: drive.distanceLabel),
+          _InfoItem(label: 'Distance', value: distanceValue),
         ],
       ),
     );
+  }
+
+  /// Formats a live distance value (in km) for the info bar.
+  ///
+  /// Metric:   sub-1 km shown as metres (e.g. "850 m"); otherwise km.
+  /// Imperial: always shown as miles.
+  ///
+  /// This mirrors the short-distance logic in [UnitService.formatDistance]
+  /// but uses [UnitService] so no raw conversions exist here.
+  static String _formatLiveDistance(double distanceKm, UnitService unitService) {
+    return unitService.formatDistance(distanceKm);
   }
 }
 
