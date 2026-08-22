@@ -29,8 +29,7 @@ import '../providers/profile_image_provider.dart';
 //   SETTINGS section
 //     ├── Appearance       (→ /profile/settings/appearance)
 //     ├── Map Appearance   (→ /profile/settings/map-appearance)
-//     ├── Units            (→ /profile/settings/units)
-//     └── Permissions      (→ /profile/settings/permissions)
+//     └── Units            (→ /profile/settings/units)
 //
 //   ABOUT section
 //     └── About TripRank   (→ /profile/about)
@@ -360,15 +359,8 @@ class _SettingsSectionCard extends StatelessWidget {
             key: const Key('settings_row_units'),
             icon: Icons.straighten_outlined,
             label: 'Units',
-            onTap: () => context.push(AppRoutes.profileUnits),
-          ),
-          const _Divider(),
-          _NavRow(
-            key: const Key('settings_row_permissions'),
-            icon: Icons.lock_outline,
-            label: 'Permissions',
             isLast: true,
-            onTap: () => context.push(AppRoutes.profilePermissions),
+            onTap: () => context.push(AppRoutes.profileUnits),
           ),
         ],
       ),

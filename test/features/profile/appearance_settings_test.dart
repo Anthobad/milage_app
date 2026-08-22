@@ -173,11 +173,6 @@ Widget _buildProfileToAppearanceRouter({
                 const Scaffold(body: Center(child: Text('Units'))),
           ),
           GoRoute(
-            path: 'settings/permissions',
-            builder: (ctx, _) =>
-                const Scaffold(body: Center(child: Text('Permissions'))),
-          ),
-          GoRoute(
             path: 'about',
             builder: (ctx, _) =>
                 const Scaffold(body: Center(child: Text('About'))),

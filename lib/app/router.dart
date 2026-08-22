@@ -8,7 +8,6 @@ import '../features/profile/presentation/about_screen.dart';
 import '../features/profile/presentation/appearance_screen.dart';
 import '../features/profile/presentation/map_appearance_screen.dart';
 import '../features/profile/presentation/profile_screen.dart';
-import '../features/profile/presentation/settings_screen.dart';
 import '../features/profile/presentation/units_screen.dart';
 import '../features/trips/presentation/trip_screen.dart';
 import '../features/trips/presentation/trip_stats_screen.dart';
@@ -35,9 +34,6 @@ class AppRoutes {
 
   /// Units settings — accessed from the Profile page.
   static const String profileUnits = '/profile/settings/units';
-
-  /// Permissions settings — accessed from the Profile page.
-  static const String profilePermissions = '/profile/settings/permissions';
 
   /// About TripRank page — accessed from the Profile page.
   static const String profileAbout = '/profile/about';
@@ -143,11 +139,6 @@ final GoRouter appRouter = GoRouter(
                 GoRoute(
                   path: 'settings/units',
                   builder: (context, state) => const UnitsScreen(),
-                ),
-                GoRoute(
-                  path: 'settings/permissions',
-                  builder: (context, state) =>
-                      const SettingPlaceholderScreen(title: 'Permissions'),
                 ),
                 // About TripRank
                 GoRoute(

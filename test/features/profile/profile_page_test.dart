@@ -13,7 +13,7 @@
 //  4.  No My Cars section
 //  5.  Driving summary section exists
 //  6.  Driving summary is all-vehicle (uses profileDrivingSummaryProvider)
-//  7.  Settings section contains Appearance, Map Appearance, Units, Permissions
+//  7.  Settings section contains Appearance, Map Appearance, Units
 //  8.  Voice is NOT present
 //  9.  Export Data is NOT present
 // 10.  About TripRank is present
@@ -90,11 +90,6 @@ GoRouter _makeRouter({
             path: 'settings/units',
             builder: (ctx, _) =>
                 const SettingPlaceholderScreen(title: 'Units'),
-          ),
-          GoRoute(
-            path: 'settings/permissions',
-            builder: (ctx, _) =>
-                const SettingPlaceholderScreen(title: 'Permissions'),
           ),
           GoRoute(
             path: 'about',
@@ -223,7 +218,7 @@ void main() {
 
     // ── Test 7 ──────────────────────────────────────────────────────────────
     testWidgets(
-        '7. Settings section contains Appearance, Map Appearance, Units, Permissions',
+        '7. Settings section contains Appearance, Map Appearance, Units',
         (tester) async {
       await tester.pumpWidget(_buildProfileScreen());
       await tester.pump();
@@ -232,7 +227,7 @@ void main() {
       expect(find.text('Appearance'), findsOneWidget);
       expect(find.text('Map Appearance'), findsOneWidget);
       expect(find.text('Units'), findsOneWidget);
-      expect(find.text('Permissions'), findsOneWidget);
+      expect(find.text('Permissions'), findsNothing);
     });
 
     // ── Test 8 ──────────────────────────────────────────────────────────────

@@ -180,11 +180,6 @@ Widget _buildProfileToUnitsRouter({
             builder: (ctx, _) => const UnitsScreen(),
           ),
           GoRoute(
-            path: 'settings/permissions',
-            builder: (ctx, _) =>
-                const Scaffold(body: Center(child: Text('Permissions'))),
-          ),
-          GoRoute(
             path: 'about',
             builder: (ctx, _) =>
                 const Scaffold(body: Center(child: Text('About'))),
