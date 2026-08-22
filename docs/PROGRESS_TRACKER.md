@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-12 — Phase 6.1 complete_
+_Last updated: 2026-08-22 — Phase 6.2 complete_
 
 ---
 
@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: 🔄 In progress** _(6.1 complete)_
+**Status: 🔄 In progress** _(6.1, 6.2 complete)_
 
 ---
 
@@ -1236,6 +1236,167 @@ None — uses existing `latlong2` and `dart:math`.
 - [x] Turn/braking/stop algorithms NOT implemented
 
 ---
+
+---
+
+### Phase 6.2 — Turn Analysis
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### What was done
+
+- **`lib/features/analytics/models/turn_event.dart`** _(new)_ — `TurnDirection` enum (`left`, `right`, `uTurn`) with documented sign convention. `TurnEvent` immutable model with: `direction`, `timestamp`, `latitude`, `longitude`, `angleDeg`, `entryBearingDeg`, `exitBearingDeg`, `speedKmh?`. Convenience getters `absAngleDeg`, `isLeft`, `isRight`, `isUTurn`.
+- **`lib/features/analytics/models/turn_analysis.dart`** _(new)_ — `TurnAnalysis` aggregated result. Holds `List<TurnEvent>`. `leftTurns`, `rightTurns`, `uTurns` derived from the list at construction — single authoritative source, no duplication. `totalTurns`, `isEmpty` convenience getters. `TurnAnalysis.empty()` factory. U-turns explicitly excluded from left/right counts.
+- **`lib/features/analytics/services/turn_detector.dart`** _(new)_ — `TurnDetectorConfig` centralising all thresholds as named constants. `TurnDetector` sliding-window algorithm with full documentation, circular-mean bearing, debounce, and classification.
+- **`lib/features/analytics/services/driving_analytics_service.dart`** _(modified)_ — Wires `TurnDetector` into the analytics pipeline. `DrivingAnalyticsService` now accepts an optional `TurnDetector` for dependency injection in tests. `analyze()` calls `turnDetector.detectTurns(sorted)` after the single-pass derivation step and stores the result in `DrivingAnalytics.turnAnalysis`.
+- **`lib/features/analytics/models/driving_analytics.dart`** _(modified)_ — `turnAnalysis` field changed from nullable stub to populated field. `DrivingAnalytics.empty()` now returns `TurnAnalysis.empty()` instead of `null`. `copyWith` and `toString` updated.
+- **`test/features/analytics/turn_analysis_test.dart`** _(new)_ — 41 unit tests. All tests use deterministic synthetic GPS tracks generated via inverse-haversine `_advance` helper. No device, network, or database required.
+
+#### Detection algorithm
+
+```
+Sorted GPS track
+        ↓
+Sliding window (windowSize = 5 points)
+    ├── Movement gate: sum haversine distance across window
+    │       < minMovementM (10 m) → skip (stationary / noise)
+    ├── Debounce gate: distance traveled since last turn
+    │       < debounceDistanceM (50 m) → skip (suppress multi-event from one turn)
+    ├── Entry bearing: circular-mean bearing across first half of window
+    │       (indices 0..halfSize-1, i.e. pairs 0→1 for ws=5)
+    ├── Exit bearing: circular-mean bearing across second half of window
+    │       (indices halfSize+1..ws-1, i.e. pairs 3→4 for ws=5)
+    ├── Heading change: GpsMathUtils.headingChangeDegrees(entry, exit)
+    │       normalised to (−180, +180]
+    │       positive = clockwise = RIGHT
+    │       negative = counter-clockwise = LEFT
+    ├── |angle| < minTurnAngleDeg (35°) → skip (gentle curve / noise)
+    ├── |angle| ≥ uTurnThresholdDeg (150°) → classify as uTurn
+    └── otherwise → left or right, emit TurnEvent at window midpoint
+```
+
+#### Sign convention
+
+`GpsMathUtils.headingChangeDegrees` normalises the bearing change to (−180, +180]:
+
+| Sign | Direction | Classification |
+|---|---|---|
+| Negative | Counter-clockwise | `TurnDirection.left` |
+| Positive | Clockwise | `TurnDirection.right` |
+| \|angle\| ≥ 150° | Near-reversal | `TurnDirection.uTurn` |
+
+This convention is documented in `turn_event.dart` and tested explicitly in the sign-convention tests.
+
+#### Configuration (all centralised in `TurnDetectorConfig`)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `windowSize` | 5 | Entry half = pair (0→1); exit half = pair (3→4); robust without merging nearby turns |
+| `minTurnAngleDeg` | 35° | Real intersections ≥ 45°; 35° margin covers slightly-angled junctions; filters highway curves (< 20°) |
+| `uTurnThresholdDeg` | 150° | True U-turns are 160–180°; 150° allows for GPS imprecision in the trace |
+| `minMovementM` | 10 m | GPS at 30 km/h ≈ 8 m per fix; 10 m filters stationary clusters |
+| `debounceDistanceM` | 50 m | Urban intersection span ≈ 10–20 m; 50 m separates events cleanly |
+
+#### U-turn behaviour
+
+- Classified as `TurnDirection.uTurn` — a separate category, not left or right.
+- **Not counted** in `leftTurns` or `rightTurns`.
+- Counted in `uTurns` and `totalTurns`.
+- Not displayed in the left/right split bar UI (Phase 6.5).
+
+#### GPS noise handling
+
+- Minimum movement gate (10 m) rejects stationary GPS clusters and near-zero movement.
+- Entry/exit circular-mean bearings average across half-windows, smoothing per-pair jitter.
+- Sliding window requires coherent bearing change across multiple points — single-point noise cannot trigger a turn.
+- ±4 m GPS jitter on a straight road: 0 false turns (tested).
+
+#### Architecture
+
+```
+Persisted GPS Track Points
+        ↓
+DrivingAnalyticsService.analyze()
+    ├── Sort by timestamp
+    ├── Single-pass AnalyzedTrackPoint derivation (speed, altitude, heading)
+    └── TurnDetector.detectTurns(sortedPoints)
+            ↓  sliding window, O(n × windowSize) ≈ O(n)
+        TurnAnalysis { turns, leftTurns, rightTurns, uTurns }
+                ↓
+        DrivingAnalytics.turnAnalysis
+                ↓
+        tripAnalyticsProvider (existing Riverpod family provider)
+```
+
+No new Riverpod providers, no new database tables, no new packages.
+
+#### Files created
+- `lib/features/analytics/models/turn_event.dart`
+- `lib/features/analytics/models/turn_analysis.dart`
+- `lib/features/analytics/services/turn_detector.dart`
+- `test/features/analytics/turn_analysis_test.dart`
+
+#### Files modified
+- `lib/features/analytics/models/driving_analytics.dart` — `turnAnalysis` populated, `empty()` returns `TurnAnalysis.empty()`
+- `lib/features/analytics/services/driving_analytics_service.dart` — wires `TurnDetector`, injects result into `DrivingAnalytics`
+
+#### Dependencies added
+None. Uses existing `latlong2`, `dart:math`, and `GpsMathUtils`.
+
+#### Known limitations
+- Turn detection operates only on the persisted GPS track — live tracking turns are not emitted in real time.
+- Window-based algorithm may miss extremely sharp turns (<5 m total movement across the window) at very low GPS fix rates.
+- The 50 m debounce distance may occasionally merge two legitimate closely-spaced turns (< 50 m apart) in dense urban environments such as roundabouts with multiple exits.
+- U-turns are not yet displayed in any UI (deferred to Phase 6.5).
+
+#### Not implemented (per spec — future phases)
+- Hard braking / sudden-stop detection (Phase 6.3)
+- Overall driving statistics / score (Phase 6.4)
+- Turn split bar UI with real data (Phase 6.5)
+- Turn event persistence to database (Phase 6.4/6.5)
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **245 tests passed**:
+  - 204 pre-existing tests (Phases 5.1–6.1 + smoke test) ✅
+  - 41 new Phase 6.2 turn analysis tests ✅
+    - Group 1 — Straight road (4 tests): north, east, GPS jitter, stationary points → 0 turns
+    - Group 2 — Left turn (3 tests): 90° left, negative angleDeg, 45° left
+    - Group 3 — Right turn (3 tests): 90° right, positive angleDeg, 45° right
+    - Group 4 — Multiple turns (2 tests): left→right, two rights
+    - Group 5 — Gentle curve (2 tests): 20° and 25° gradual changes → 0 turns
+    - Group 6 — U-turn (2 tests): 180° and 160° → uTurn, not left/right
+    - Group 7 — GPS noise (2 tests): stationary cluster, 1 m steps → 0 turns
+    - Group 8 — Missing data (7 tests): null speed, null heading, duplicate timestamps/coords, short track, empty, single point
+    - Group 9 — Heading wraparound (3 tests): 355→5 = +10°, 5→355 = −10°, 360° boundary track
+    - Group 10 — Threshold boundary (4 tests): 34° (below), 36° (above), 149° (left not right), 150°+ (uTurn)
+    - Group 11 — TurnAnalysis model (3 tests): empty factory, U-turn exclusion from counts, absAngleDeg
+    - Group 12 — Service integration (1 test): turnAnalysis non-null for empty track
+    - Group 13 — TurnDetectorConfig (3 tests): custom high threshold, custom low threshold, default values
+    - Group 14 — Location and timestamp (2 tests): valid coordinates, timestamp within track range
+- [x] Left/right turn detection implemented
+- [x] U-turn classified separately, not counted in left/right
+- [x] Multi-point sliding window (windowSize = 5)
+- [x] Circular-mean bearing for entry and exit halves
+- [x] Heading normalised to (−180, +180] via `GpsMathUtils.headingChangeDegrees`
+- [x] Sign convention documented and tested: positive = right, negative = left
+- [x] Minimum movement threshold (10 m) prevents stationary false turns
+- [x] Minimum angle threshold (35°) filters gentle curves and noise
+- [x] U-turn threshold (150°) separates large turns from true reversals
+- [x] Distance-based debounce (50 m) suppresses duplicate events from one physical turn
+- [x] GPS heading not required — bearing computed from coordinates
+- [x] Speed field is optional
+- [x] Turn location = window midpoint coordinates
+- [x] Turn timestamp = window midpoint timestamp
+- [x] `DrivingAnalytics.turnAnalysis` populated by `DrivingAnalyticsService`
+- [x] `TurnAnalysis.empty()` returned for empty tracks
+- [x] O(n × windowSize) ≈ O(n) performance
+- [x] No database changes
+- [x] No UI changes
+- [x] No new packages
+- [x] All existing Phase 5 and Phase 6.1 tests continue passing
 
 ---
 

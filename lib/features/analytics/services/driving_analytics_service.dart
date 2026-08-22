@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// DrivingAnalyticsService — Phase 6.1 Foundation
+// DrivingAnalyticsService — Phase 6.1 Foundation / Phase 6.2 Turn Analysis
 // ---------------------------------------------------------------------------
 //
 // The analytics engine that processes a list of persisted GPS track points
@@ -9,14 +9,13 @@
 //
 //   1. Accept a list of [TrackPointRecord]s and a trip ID.
 //   2. Sort the points chronologically (authoritative order by timestamp).
-//   3. Compute per-segment derived values (distance, duration, speed,
-//      acceleration, heading change, altitude change) using [GpsMathUtils].
+//   3. Compute per-segment derived values via [GpsMathUtils].
 //   4. Aggregate speed and altitude analyses.
-//   5. Return a structured, immutable [DrivingAnalytics] result.
+//   5. Run [TurnDetector] to produce [TurnAnalysis].   ← Phase 6.2
+//   6. Return a structured, immutable [DrivingAnalytics] result.
 //
 // ## What this service does NOT do
 //
-//   - Turn detection       (Phase 6.2)
 //   - Braking detection    (Phase 6.3)
 //   - Driving score        (Phase 6.4)
 //   - UI rendering
@@ -27,7 +26,8 @@
 // ## Performance
 //
 //   Single pass over the sorted list: O(n).
-//   No nested loops.  No repeated allocations inside the hot path.
+//   Turn detection is O(n × windowSize) ≈ O(n) (windowSize is constant).
+//   No nested full-track scans.
 //
 // ## Safety
 //
@@ -38,7 +38,9 @@ import '../models/altitude_analysis.dart';
 import '../models/analyzed_track_point.dart';
 import '../models/driving_analytics.dart';
 import '../models/speed_analysis.dart';
+import '../models/turn_analysis.dart';
 import 'gps_math_utils.dart';
+import 'turn_detector.dart';
 import '../../trips/models/track_point_record.dart';
 
 /// Plain Dart service that processes GPS track points into [DrivingAnalytics].
@@ -51,8 +53,19 @@ import '../../trips/models/track_point_record.dart';
 /// final service = DrivingAnalyticsService();
 /// final analytics = service.analyze(tripId: trip.id, points: trackPoints);
 /// ```
+///
+/// To override the turn detection configuration:
+/// ```dart
+/// final service = DrivingAnalyticsService(
+///   turnDetector: TurnDetector(config: TurnDetectorConfig(minTurnAngleDeg: 45)),
+/// );
+/// ```
 class DrivingAnalyticsService {
-  const DrivingAnalyticsService();
+  const DrivingAnalyticsService({
+    this.turnDetector = const TurnDetector(),
+  });
+
+  final TurnDetector turnDetector;
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -72,7 +85,6 @@ class DrivingAnalyticsService {
     }
 
     // ── Step 1: sort chronologically ───────────────────────────────────────
-    // Timestamp is the authoritative ordering field per spec §4.
     final sorted = List<TrackPointRecord>.from(points)
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
@@ -83,7 +95,7 @@ class DrivingAnalyticsService {
     double totalDistanceM = 0;
     double movingDurationS = 0;
     double? maxDerivedSpeedKmh;
-    double? minDerivedSpeedKmh; // non-zero moving segments only
+    double? minDerivedSpeedKmh;
     double sumMovingSpeedKmh = 0;
     int movingSegments = 0;
     int pointsWithSpeed = 0;
@@ -100,46 +112,39 @@ class DrivingAnalyticsService {
     for (var i = 0; i < sorted.length; i++) {
       final cur = sorted[i];
 
-      // ── Altitude coverage ────────────────────────────────────────────────
       final curAlt = cur.altitude;
       if (curAlt != null) {
         pointsWithAlt++;
         final curMin = minAltitudeM;
         final curMax = maxAltitudeM;
-        minAltitudeM = curMin == null ? curAlt : (curAlt < curMin ? curAlt : curMin);
-        maxAltitudeM = curMax == null ? curAlt : (curAlt > curMax ? curAlt : curMax);
+        minAltitudeM =
+            curMin == null ? curAlt : (curAlt < curMin ? curAlt : curMin);
+        maxAltitudeM =
+            curMax == null ? curAlt : (curAlt > curMax ? curAlt : curMax);
       }
 
-      // ── Speed coverage (raw GPS speed) ───────────────────────────────────
       if (cur.speedKmh != null) pointsWithSpeed++;
 
       if (i == 0) {
-        // First point — no segment values
         analyzedPoints.add(_buildFirstPoint(cur));
         continue;
       }
 
       final prev = sorted[i - 1];
 
-      // ── Segment geometry ─────────────────────────────────────────────────
       final distM = GpsMathUtils.distanceMetres(
         prev.latitude, prev.longitude,
         cur.latitude, cur.longitude,
       );
-
       final durS = GpsMathUtils.timeDeltaSeconds(
         prev.timestamp, cur.timestamp,
       );
-
-      // ── Derived speed ────────────────────────────────────────────────────
       final spdMs = GpsMathUtils.derivedSpeedMs(distM, durS);
       final spdKmh = GpsMathUtils.speedMsToKmh(spdMs);
 
-      // ── Speed accumulation ───────────────────────────────────────────────
       if (spdKmh != null && durS != null && durS > 0) {
         totalDistanceM += distM;
         if (spdKmh > 0) {
-          // Moving segment
           movingDurationS += durS;
           sumMovingSpeedKmh += spdKmh;
           movingSegments++;
@@ -153,7 +158,6 @@ class DrivingAnalyticsService {
         }
       }
 
-      // ── Speed change & acceleration ──────────────────────────────────────
       double? speedChangeMps;
       double? accelMps2;
       final prevSpd = prevDerivedSpeedMs;
@@ -166,16 +170,12 @@ class DrivingAnalyticsService {
           maxSpeedChangeMps = absChange;
         }
       }
-      if (spdMs != null) {
-        prevDerivedSpeedMs = spdMs;
-      }
+      if (spdMs != null) prevDerivedSpeedMs = spdMs;
 
-      // ── Heading change ───────────────────────────────────────────────────
       final headingChange = GpsMathUtils.headingChangeDegrees(
         prev.headingDegrees, cur.headingDegrees,
       );
 
-      // ── Altitude change ──────────────────────────────────────────────────
       final altChange = GpsMathUtils.altitudeChangeMetre(
         prev.altitude, cur.altitude,
       );
@@ -211,9 +211,8 @@ class DrivingAnalyticsService {
       pointsWithSpeed: pointsWithSpeed,
       maxDerivedSpeedKmh: maxDerivedSpeedKmh,
       minDerivedSpeedKmh: minDerivedSpeedKmh,
-      avgDerivedSpeedKmh: movingSegments > 0
-          ? sumMovingSpeedKmh / movingSegments
-          : null,
+      avgDerivedSpeedKmh:
+          movingSegments > 0 ? sumMovingSpeedKmh / movingSegments : null,
       maxSpeedChangeMps: maxSpeedChangeMps,
       totalDistanceM: totalDistanceM > 0 ? totalDistanceM : null,
       movingDurationS: movingDurationS > 0 ? movingDurationS : null,
@@ -234,17 +233,20 @@ class DrivingAnalyticsService {
           : null,
     );
 
+    // ── Step 4: turn analysis ──────────────────────────────────────────────
+    final TurnAnalysis turnAnalysis = turnDetector.detectTurns(sorted);
+
     return DrivingAnalytics(
       tripId: tripId,
       analyzedPoints: analyzedPoints,
       speedAnalysis: speedAnalysis,
       altitudeAnalysis: altitudeAnalysis,
+      turnAnalysis: turnAnalysis,
     );
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
 
-  /// Builds the first [AnalyzedTrackPoint] which has no segment values.
   AnalyzedTrackPoint _buildFirstPoint(TrackPointRecord p) {
     return AnalyzedTrackPoint(
       id: p.id,
@@ -256,7 +258,6 @@ class DrivingAnalyticsService {
       rawSpeedKmh: p.speedKmh,
       accuracyM: p.accuracyM,
       headingDegrees: p.headingDegrees,
-      // No segment values for the first point
     );
   }
 }
