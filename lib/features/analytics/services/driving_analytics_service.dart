@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// DrivingAnalyticsService — Phase 6.1 Foundation / Phase 6.2 Turn / Phase 6.3 Braking
+// DrivingAnalyticsService — Phase 6.1–6.4.1
 // ---------------------------------------------------------------------------
 //
 // The analytics engine that processes a list of persisted GPS track points
@@ -13,7 +13,8 @@
 //   4. Aggregate speed and altitude analyses.
 //   5. Run [TurnDetector] to produce [TurnAnalysis].     ← Phase 6.2
 //   6. Run [BrakingDetector] to produce [BrakingAnalysis]. ← Phase 6.3
-//   7. Return a structured, immutable [DrivingAnalytics] result.
+//   7. Run [StopDetector] to produce [StopAnalysis].     ← Phase 6.4.1
+//   8. Return a structured, immutable [DrivingAnalytics] result.
 //
 // ## What this service does NOT do
 //
@@ -28,6 +29,7 @@
 //   Single pass over the sorted list: O(n).
 //   Turn detection is O(n × windowSize) ≈ O(n) (windowSize is constant).
 //   Braking detection is O(n) — single forward pass.
+//   Stop detection is O(n) — single forward pass.
 //   No nested full-track scans.
 //
 // ## Safety
@@ -40,9 +42,11 @@ import '../models/analyzed_track_point.dart';
 import '../models/braking_analysis.dart';
 import '../models/driving_analytics.dart';
 import '../models/speed_analysis.dart';
+import '../models/stop_analysis.dart';
 import '../models/turn_analysis.dart';
 import 'braking_detector.dart';
 import 'gps_math_utils.dart';
+import 'stop_detector.dart';
 import 'turn_detector.dart';
 import '../../trips/models/track_point_record.dart';
 
@@ -62,16 +66,19 @@ import '../../trips/models/track_point_record.dart';
 /// final service = DrivingAnalyticsService(
 ///   turnDetector: TurnDetector(config: TurnDetectorConfig(minTurnAngleDeg: 45)),
 ///   brakingDetector: BrakingDetector(config: BrakingDetectorConfig(minDecelerationMps2: 0.6)),
+///   stopDetector: StopDetector(config: StopDetectorConfig(minimumStopDurationSeconds: 20)),
 /// );
 /// ```
 class DrivingAnalyticsService {
   const DrivingAnalyticsService({
     this.turnDetector = const TurnDetector(),
     this.brakingDetector = const BrakingDetector(),
+    this.stopDetector = const StopDetector(),
   });
 
   final TurnDetector turnDetector;
   final BrakingDetector brakingDetector;
+  final StopDetector stopDetector;
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -245,6 +252,9 @@ class DrivingAnalyticsService {
     // ── Step 5: braking analysis ───────────────────────────────────────────
     final BrakingAnalysis brakingAnalysis = brakingDetector.detect(sorted);
 
+    // ── Step 6: stop analysis ──────────────────────────────────────────────
+    final StopAnalysis stopAnalysis = stopDetector.detect(sorted);
+
     return DrivingAnalytics(
       tripId: tripId,
       analyzedPoints: analyzedPoints,
@@ -252,6 +262,7 @@ class DrivingAnalyticsService {
       altitudeAnalysis: altitudeAnalysis,
       turnAnalysis: turnAnalysis,
       brakingAnalysis: brakingAnalysis,
+      stopAnalysis: stopAnalysis,
     );
   }
 

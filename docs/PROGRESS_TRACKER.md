@@ -1,6 +1,6 @@
 # TripRank Development Progress
 
-_Last updated: 2026-08-22 — Phase 6.4 complete_
+_Last updated: 2026-08-22 — Phase 6.4.1 complete_
 
 ---
 
@@ -1141,7 +1141,7 @@ Turn detection not yet implemented. UI placeholder shown. Will be populated in P
 
 ## Phase 6 — Driving Analytics
 
-**Status: 🔄 In progress** _(6.1, 6.2, 6.3, 6.4 complete)_
+**Status: 🔄 In progress** _(6.1, 6.2, 6.3, 6.4, 6.4.1 complete)_
 
 ---
 
@@ -1725,6 +1725,205 @@ None.
 - [x] No UI changes
 - [x] No new packages
 - [x] All existing Phase 5 and Phase 6.1–6.3 tests continue passing
+
+---
+
+---
+
+### Phase 6.4.1 — Stop Detection
+
+**Status: ✅ Done**
+**Completed: 2026-08-22**
+
+#### Background
+
+During Phase 6.4 verification it was discovered that `Trip.stops` was always null
+because a real stop detector had never been implemented.  This phase implements
+reliable GPS-based stop detection and wires it into the existing analytics
+architecture and persistence pipeline.
+
+#### Detection approach
+
+The detector uses a two-state machine — MOVING and STOPPED — with a **hysteresis
+band** to prevent rapid toggling around the speed threshold:
+
+```
+State: MOVING
+    speedKmh ≤ nearZeroSpeedKmh (5 km/h) → open stop window → STOPPED
+
+State: STOPPED
+    speedKmh > recoverySpeedKmh (8 km/h) AND
+    position drift ≥ minimumMovementDistanceMeters (10 m) → seal window → MOVING
+    otherwise → extend window (still STOPPED)
+
+Window sealed / end of track:
+    durationS ≥ minimumStopDurationSeconds (15 s) → emit StopEvent
+    otherwise → discard (GPS jitter / brief pause)
+```
+
+A single physical stop produces exactly **one** StopEvent regardless of how many
+GPS fixes occur during the stop.
+
+#### Thresholds (all configurable via `StopDetectorConfig`)
+
+| Constant | Default | Rationale |
+|---|---|---|
+| `nearZeroSpeedKmh` | 5 km/h | Android GPS noise at standstill reads 0–3 km/h; 5 km/h absorbs noise reliably |
+| `minimumStopDurationSeconds` | 15 s | Rejects roundabouts, slow curves, traffic calming; accepts genuine traffic-light stops |
+| `minimumMovementDistanceMeters` | 10 m | Stationary GPS position drift is typically 5–15 m; gate prevents drift from ending a stop prematurely |
+| `maximumTimeGapSeconds` | 30 s | Seals the window on data gaps (tunnels, signal loss, GPS throttling) to avoid inflating durations |
+| `recoverySpeedKmh` | 8 km/h | Hysteresis band [5, 8] km/h prevents repeated toggling when speed oscillates near the threshold |
+
+All thresholds are conservative and intended to be tuned after real-device testing.
+
+#### Noise handling
+
+- **Speed noise**: `nearZeroSpeedKmh` = 5 km/h (above typical 0–3 km/h standstill noise)
+- **Duration gate**: `minimumStopDurationSeconds` = 15 s (rejects sub-15 s dips)
+- **Position drift**: `minimumMovementDistanceMeters` = 10 m (prevents premature window close)
+- **Hysteresis**: `recoverySpeedKmh` > `nearZeroSpeedKmh` (prevents rapid toggling)
+- **Time gaps**: segments exceeding 30 s are sealed, not accumulated
+- **Duplicate timestamps**: skipped silently without disrupting window state
+- **Missing speed**: if raw GPS speed is unavailable, derived speed (haversine / Δt) is used; if neither is available the current window state is carried forward conservatively
+
+#### Event model (`StopEvent`)
+
+```dart
+class StopEvent {
+  final DateTime timestamp;    // first GPS fix inside the stop window
+  final double latitude;       // coordinates of the first qualifying fix
+  final double longitude;
+  final double durationS;      // elapsed seconds from first to last qualifying fix
+  final int startIndex;        // index into the sorted track-point list
+  final int endIndex;          // index of the last qualifying point
+}
+```
+
+#### Analysis model (`StopAnalysis`)
+
+```dart
+class StopAnalysis {
+  final List<StopEvent> events;  // source of truth
+  final int stopCount;           // derived from events.length at construction
+}
+```
+
+`stopCount` is always equal to `events.length` — no separate counter.
+
+#### DrivingAnalytics integration
+
+```
+DrivingAnalyticsService.analyze()
+    ├── Step 1–3: AnalyzedTrackPoint derivation + speed/altitude accumulation
+    ├── Step 4: TurnDetector.detectTurns()       ← Phase 6.2
+    ├── Step 5: BrakingDetector.detect()          ← Phase 6.3
+    └── Step 6: StopDetector.detect()             ← Phase 6.4.1
+                    ↓
+            DrivingAnalytics.stopAnalysis
+```
+
+`DrivingAnalytics.empty()` returns `StopAnalysis.empty()` (zero events, stopCount = 0).
+
+`StopDetector` is injectable into `DrivingAnalyticsService` for tests:
+```dart
+DrivingAnalyticsService(
+  stopDetector: StopDetector(
+    config: StopDetectorConfig(minimumStopDurationSeconds: 5),
+  ),
+)
+```
+
+#### Trip persistence integration
+
+`DriveNotifier._persistTripAndPoints` now runs the stop detector synchronously
+on the in-memory `List<TrackPoint>` at FINISH time (before persisting the trip row).
+The stop count is passed to `TripBuilder.build(stops: stopCount)` and stored in
+the existing `trips.stops` INTEGER column.
+
+No new database columns, no schema version bump, no new tables.
+
+```
+FINISH pressed
+    ↓
+DriveNotifier._computeStopCount(trackPoints)
+    → converts TrackPoint → TrackPointRecord in-memory
+    → runs StopDetector.detect()
+    → returns analysis.stopCount
+          ↓
+TripBuilder.build(stops: stopCount)
+          ↓
+TripRepository.createTrip(trip)   ← trips.stops = stopCount persisted
+```
+
+#### Provider integration
+
+`TripAnalyticsState.stopCount` already delegated to `trip?.stops`.  No changes
+to the provider were required.  With `TripBuilder` now populating `stops`, all
+new trips will have a non-null `stopCount` in the provider.
+
+The UI can access the stop count via either:
+
+```dart
+final stopCount = state.stopCount;                         // persisted value
+final stopCount = state.analytics?.stopAnalysis?.stopCount; // computed value
+```
+
+Both are consistent for new trips (computed at FINISH, persisted, loaded back).
+
+#### Files created
+- `lib/features/analytics/models/stop_event.dart`
+- `lib/features/analytics/models/stop_analysis.dart`
+- `lib/features/analytics/services/stop_detector.dart`
+- `test/features/analytics/stop_detection_test.dart`
+
+#### Files modified
+- `lib/features/analytics/models/driving_analytics.dart` — added `StopAnalysis? stopAnalysis` field
+- `lib/features/analytics/services/driving_analytics_service.dart` — wired `StopDetector` as Step 6
+- `lib/features/trips/models/trip.dart` — `TripBuilder.build()` accepts `int? stops` parameter
+- `lib/features/map/providers/drive_provider.dart` — added `_computeStopCount()`, wired into `_persistTripAndPoints`
+
+#### Dependencies added
+None.
+
+#### Known limitations
+- Stop detection operates only on the **persisted GPS track** after FINISH.  Stops are not counted in real time during an active drive.
+- GPS fix rate directly affects accuracy: at 5 s intervals a 20-second stop may be represented by only 4 GPS points.
+- `minimumStopDurationSeconds` = 15 s will miss stops shorter than 15 s (brief traffic light changes, rolling stops).  Tune down for stricter counting if required.
+- `nearZeroSpeedKmh` = 5 km/h may count very slow creep (4–5 km/h) as a stop in congested traffic.  Tune up to 7–8 km/h if false positives are observed.
+- The hysteresis position-drift check uses the **initial stop position** as the reference point.  Very long stops with GPS drift > 10 m may re-open briefly; in practice this resolves within 1–2 extra seconds of accumulated duration.
+- `Trip.stops` is null for all trips recorded before Phase 6.4.1.  Historical trips will not be retroactively re-analyzed.
+
+#### Verification
+- `flutter pub get` → **success**
+- `flutter analyze` → **No issues found.**
+- All **395 tests passed**:
+  - 330 pre-existing tests (Phases 5.1–6.4 + smoke test) ✅
+  - 65 new Phase 6.4.1 stop detection tests ✅
+    - Group 1 (3 tests): Empty and minimal tracks
+    - Group 2 (3 tests): No stops (moving throughout)
+    - Group 3 (2 tests): Short stop rejected
+    - Group 4 (2 tests): Valid stop accepted
+    - Group 5 (5 tests): One stop — event fields
+    - Group 6 (3 tests): Multiple stops
+    - Group 7 (1 test): Long stop
+    - Group 8 (2 tests): Stop at beginning
+    - Group 9 (2 tests): Stop at end (end-of-track seal)
+    - Group 10 (2 tests): Stationary entire trip
+    - Group 11 (4 tests): GPS jitter and hysteresis
+    - Group 12 (2 tests): Missing speed
+    - Group 13 (2 tests): Duplicate timestamps
+    - Group 14 (2 tests): Duplicate coordinates
+    - Group 15 (2 tests): Large time gaps
+    - Group 16 (1 test): Multiple GPS points → ONE event
+    - Group 17 (3 tests): StopAnalysis model
+    - Group 18 (2 tests): StopEvent model
+    - Group 19 (3 tests): StopDetectorConfig
+    - Group 20 (6 tests): DrivingAnalyticsService integration
+    - Group 21 (2 tests): TripBuilder stores stop count
+    - Group 22 (4 tests): TripAnalyticsState exposes stopCount
+    - Group 23 (2 tests): NaN / Infinity safety
+    - Group 24 (1 test): Performance (10 000 points)
+    - Group 25 (3 tests): SQLite round-trip (stops field persisted)
 
 ---
 

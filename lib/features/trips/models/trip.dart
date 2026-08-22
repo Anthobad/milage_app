@@ -297,7 +297,7 @@ const Object _keep = Object();
 /// | maximumSpeedKmh| max(trackPoints.speedKmh)       | ✅ (≥1 pt) |
 /// | minimumAltM    | min(trackPoints.altitude)       | ✅ (≥1 pt) |
 /// | maximumAltM    | max(trackPoints.altitude)       | ✅ (≥1 pt) |
-/// | stops          | NOT YET IMPLEMENTED             | ❌ null    |
+/// | stops          | StopDetector result             | ✅ (Phase 6.4.1) |
 class TripBuilder {
   /// Creates a [Trip] from a finalized drive.
   ///
@@ -306,6 +306,7 @@ class TripBuilder {
   /// [drive] — the completed [DriveState] (must have status completed or finishing).
   /// [destination] — the active [Destination] at drive end, or null for Reckless.
   /// [startName] — reverse-geocoded name for the start location, or null.
+  /// [stops] — number of stops detected by [StopDetector], or null if not computed.
   static Trip build({
     required String tripId,
     required String? vehicleId,
@@ -314,6 +315,7 @@ class TripBuilder {
     double? destinationLatitude,
     double? destinationLongitude,
     String? destinationName,
+    int? stops,
   }) {
     final startTime = drive.startedAt ?? DateTime.now().toUtc();
     final endTime = drive.finishedAt ?? DateTime.now().toUtc();
@@ -364,7 +366,7 @@ class TripBuilder {
       maximumSpeedKmh: maxSpeed,
       minimumAltitudeM: minAlt,
       maximumAltitudeM: maxAlt,
-      stops: null, // stop detection not yet implemented
+      stops: stops,
       createdAt: DateTime.now().toUtc(),
     );
   }

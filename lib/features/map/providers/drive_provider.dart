@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../models/destination.dart';
 import '../models/drive_state.dart';
 import '../services/drive_controller.dart';
+import '../../analytics/services/stop_detector.dart';
 import '../../cars/providers/vehicle_provider.dart';
 import '../../trips/models/track_point_record.dart';
 import '../../trips/models/trip.dart';
@@ -207,7 +208,7 @@ class DriveNotifier extends Notifier<DriveState> {
   /// `PRAGMA foreign_keys = ON` is enabled, so any track-point insert that
   /// references a non-existent trip ID will fail with a constraint violation.
   ///
-  /// 1. Build & insert the trip summary row first.
+  /// 1. Build & insert the trip summary row first (including stop count).
   /// 2. Then flush all track points (the parent row now exists).
   Future<String?> _persistTripAndPoints(DriveState drive) async {
     try {
@@ -216,6 +217,12 @@ class DriveNotifier extends Notifier<DriveState> {
 
       // ignore: avoid_print
       print('[DriveNotifier] Persisting trip $tripId with ${drive.trackPoints.length} track points');
+
+      // ── Compute stop count from in-memory track points ──────────────────
+      // Convert in-memory TrackPoint list to TrackPointRecord list so the
+      // StopDetector (which consumes the same model as the rest of the
+      // analytics pipeline) can process them without a database round-trip.
+      final stopCount = _computeStopCount(drive.trackPoints, tripId);
 
       // Build the trip summary.
       final trip = TripBuilder.build(
@@ -226,13 +233,14 @@ class DriveNotifier extends Notifier<DriveState> {
         destinationLatitude: dest?.latitude,
         destinationLongitude: dest?.longitude,
         destinationName: dest?.name,
+        stops: stopCount,
       );
 
       // Step 1: Persist the trip summary row FIRST.
       final tripRepo = ref.read(tripRepositoryProvider);
       await tripRepo.createTrip(trip);
       // ignore: avoid_print
-      print('[DriveNotifier] Trip row created OK');
+      print('[DriveNotifier] Trip row created OK (stops: $stopCount)');
 
       // Step 2: Flush all track points now that the parent row exists.
       await _flushTrackPoints(drive.trackPoints, tripId);
@@ -243,6 +251,34 @@ class DriveNotifier extends Notifier<DriveState> {
     } catch (error, stackTrace) {
       // ignore: avoid_print
       print('[DriveNotifier] Trip persistence FAILED: $error\n$stackTrace');
+      return null;
+    }
+  }
+
+  /// Runs [StopDetector] on the in-memory [TrackPoint] list and returns the
+  /// number of detected stops, or null if the list is empty.
+  ///
+  /// The detector is given the same default configuration as the analytics
+  /// pipeline.  The computation is synchronous and O(n) so it completes in
+  /// milliseconds for typical trip lengths.
+  int? _computeStopCount(List<TrackPoint> points, String tripId) {
+    if (points.isEmpty) return null;
+    try {
+      // Convert in-memory TrackPoint → TrackPointRecord without database.
+      // The id and tripId fields are not used by the StopDetector.
+      const uuidGen = Uuid();
+      final records = points.map((p) => TrackPointRecord.fromTrackPoint(
+            id: uuidGen.v4(),
+            tripId: tripId,
+            point: p,
+          )).toList();
+
+      const detector = StopDetector();
+      final analysis = detector.detect(records);
+      return analysis.stopCount;
+    } catch (error, stack) {
+      // ignore: avoid_print
+      print('[DriveNotifier] Stop count computation failed: $error\n$stack');
       return null;
     }
   }

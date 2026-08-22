@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// DrivingAnalytics — Phase 6.1 Foundation / Phase 6.2 Turn / Phase 6.3 Braking
+// DrivingAnalytics — Phase 6.1–6.4.1
 // ---------------------------------------------------------------------------
 //
 // Top-level analytics result model.
@@ -8,7 +8,7 @@
 //   6.1 — Foundation: speed analysis, altitude analysis, track summary
 //   6.2 — Turn analysis (TurnAnalysis) ← populated
 //   6.3 — Braking / sudden-stop detection (BrakingAnalysis) ← populated
-//   6.4 — Overall driving statistics (DrivingScore)
+//   6.4.1 — Stop detection (StopAnalysis) ← populated
 //   6.5 — Analytics UI integration
 //
 // All sub-models are nullable so that future phases can be added
@@ -25,6 +25,7 @@ import 'analyzed_track_point.dart';
 import 'altitude_analysis.dart';
 import 'braking_analysis.dart';
 import 'speed_analysis.dart';
+import 'stop_analysis.dart';
 import 'turn_analysis.dart';
 
 /// The complete analytics result for one trip.
@@ -39,6 +40,7 @@ class DrivingAnalytics {
     required this.altitudeAnalysis,
     this.turnAnalysis,
     this.brakingAnalysis,
+    this.stopAnalysis,
     this.overallStatistics,
   });
 
@@ -71,6 +73,12 @@ class DrivingAnalytics {
   /// Phase 6.3 onward.
   final BrakingAnalysis? brakingAnalysis;
 
+  /// Stop analysis — populated from Phase 6.4.1.
+  ///
+  /// Non-null from Phase 6.4.1 onward.  [StopAnalysis.stopCount] is the
+  /// number of meaningful stops detected during the trip.
+  final StopAnalysis? stopAnalysis;
+
   /// Overall driving statistics / score — populated in Phase 6.4.  Null until
   /// implemented.
   final dynamic overallStatistics;
@@ -95,6 +103,7 @@ class DrivingAnalytics {
       altitudeAnalysis: AltitudeAnalysis.empty(),
       turnAnalysis: TurnAnalysis.empty(),
       brakingAnalysis: BrakingAnalysis.empty(),
+      stopAnalysis: StopAnalysis.empty(),
     );
   }
 
@@ -107,6 +116,7 @@ class DrivingAnalytics {
     AltitudeAnalysis? altitudeAnalysis,
     TurnAnalysis? turnAnalysis,
     BrakingAnalysis? brakingAnalysis,
+    StopAnalysis? stopAnalysis,
     dynamic overallStatistics,
   }) {
     return DrivingAnalytics(
@@ -116,6 +126,7 @@ class DrivingAnalytics {
       altitudeAnalysis: altitudeAnalysis ?? this.altitudeAnalysis,
       turnAnalysis: turnAnalysis ?? this.turnAnalysis,
       brakingAnalysis: brakingAnalysis ?? this.brakingAnalysis,
+      stopAnalysis: stopAnalysis ?? this.stopAnalysis,
       overallStatistics: overallStatistics ?? this.overallStatistics,
     );
   }
@@ -124,5 +135,6 @@ class DrivingAnalytics {
   String toString() =>
       'DrivingAnalytics(tripId: $tripId, points: $pointCount, '
       'speed: $speedAnalysis, altitude: $altitudeAnalysis, '
-      'turns: $turnAnalysis, braking: $brakingAnalysis)';
+      'turns: $turnAnalysis, braking: $brakingAnalysis, '
+      'stops: $stopAnalysis)';
 }
